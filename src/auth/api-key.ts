@@ -54,6 +54,8 @@ export async function validateApiKey(
 
   const { api_keys: key, users: user } = rows[0];
 
+  if (!user && !key.isReadonly) return null;
+
   await db
     .update(apiKeys)
     .set({ lastUsedAt: new Date() })
