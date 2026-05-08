@@ -22,7 +22,7 @@ pnpm install
 1. Create a new project at [console.neon.tech](https://console.neon.tech)
 2. Create a database (name it `myelin` or anything you like)
 3. Copy the **connection string** from the dashboard — it looks like:
-   ```
+   ```text
    postgresql://username:password@ep-xxx.us-east-2.aws.neon.tech/myelin?sslmode=require
    ```
 

@@ -11,7 +11,7 @@ export function titleToSlug(title: string): string {
 }
 
 export async function generateUniqueSlug(title: string, db: Db): Promise<string> {
-  const base = titleToSlug(title);
+  const base = titleToSlug(title) || "submission";
   const existing = await db
     .select({ slug: submissions.slug })
     .from(submissions)
