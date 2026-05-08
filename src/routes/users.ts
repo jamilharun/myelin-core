@@ -25,7 +25,7 @@ const userRoute = createRoute({
             username: z.string(),
             reputation: z.number().int(),
             submission_count: z.number().int(),
-            member_since: z.date(),
+            member_since: z.string().datetime(),
           }),
         },
       },

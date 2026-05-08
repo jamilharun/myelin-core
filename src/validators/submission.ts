@@ -19,15 +19,15 @@ const sourceUrl = z
 
 const optimizationSchema = z.object({
   type: z.literal("optimization"),
-  title: z.string().min(1).max(200),
-  cpu: z.string().min(1),
+  title: z.string().trim().min(1).max(200),
+  cpu: z.string().trim().min(1),
   metric: z.enum(METRIC),
   before: z.number().positive(),
   after: z.number().positive(),
-  code_before: z.string().min(1).max(MAX_CODE),
-  code_after: z.string().min(1).max(MAX_CODE),
+  code_before: z.string().trim().min(1).max(MAX_CODE),
+  code_after: z.string().trim().min(1).max(MAX_CODE),
   language: z.enum(LANGUAGE),
-  body: z.string().max(5000).optional(),
+  body: z.string().trim().max(5000).optional(),
   simd: z.enum(SIMD).optional(),
   tags: z.array(z.string().max(30)).max(10).default([]),
   source_url: sourceUrl,
@@ -36,11 +36,11 @@ const optimizationSchema = z.object({
 
 const gotchaSchema = z.object({
   type: z.literal("gotcha"),
-  title: z.string().min(1).max(200),
-  cpu: z.string().min(1),
-  body: z.string().min(1).max(5000),
-  code_before: z.string().max(MAX_CODE).optional(),
-  code_after: z.string().max(MAX_CODE).optional(),
+  title: z.string().trim().min(1).max(200),
+  cpu: z.string().trim().min(1),
+  body: z.string().trim().min(1).max(5000),
+  code_before: z.string().trim().max(MAX_CODE).optional(),
+  code_after: z.string().trim().max(MAX_CODE).optional(),
   simd: z.enum(SIMD).optional(),
   tags: z.array(z.string().max(30)).max(10).default([]),
   source_url: sourceUrl,
@@ -48,10 +48,10 @@ const gotchaSchema = z.object({
 
 const snippetSchema = z.object({
   type: z.literal("snippet"),
-  title: z.string().min(1).max(200),
-  code_after: z.string().min(1).max(MAX_CODE),
+  title: z.string().trim().min(1).max(200),
+  code_after: z.string().trim().min(1).max(MAX_CODE),
   language: z.enum(LANGUAGE),
-  body: z.string().max(5000).optional(),
+  body: z.string().trim().max(5000).optional(),
   tags: z.array(z.string().max(30)).max(10).default([]),
   source_url: sourceUrl,
 });
