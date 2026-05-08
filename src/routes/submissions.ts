@@ -133,6 +133,7 @@ router.openapi(gotchasRoute, async (c) => {
 
   const conditions = [
     eq(submissions.status, "approved"),
+    eq(submissions.isCanonical, true),
     eq(submissions.type, "gotcha"),
     ...(cpu ? [eq(submissions.cpu, cpu)] : []),
   ];
@@ -174,6 +175,7 @@ router.openapi(snippetsRoute, async (c) => {
 
   const conditions = [
     eq(submissions.status, "approved"),
+    eq(submissions.isCanonical, true),
     eq(submissions.type, "snippet"),
     ...tags.map((tag) => sql`${tag} = ANY(${submissions.tags})`),
   ];
@@ -313,7 +315,7 @@ router.openapi(commentsRoute, async (c) => {
   const sub = await db
     .select({ id: submissions.id })
     .from(submissions)
-    .where(eq(submissions.slug, slug))
+    .where(and(eq(submissions.slug, slug), eq(submissions.status, "approved")))
     .limit(1);
 
   if (sub.length === 0) {

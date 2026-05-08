@@ -1,4 +1,10 @@
 import { eq, like } from "drizzle-orm";
+
+function isUsernameConflict(e: unknown): boolean {
+  return e instanceof Error &&
+    e.message.includes("unique") &&
+    e.message.includes("username");
+}
 import { users } from "../db/schema";
 import type { Db } from "../db/client";
 
@@ -9,42 +15,58 @@ interface GitHubUser {
 }
 
 async function fetchGitHubUser(accessToken: string): Promise<GitHubUser> {
-  const res = await fetch("https://api.github.com/user", {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "User-Agent": "myelin-core/1.0",
-      Accept: "application/vnd.github+json",
-    },
-  });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
-  return res.json() as Promise<GitHubUser>;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const res = await fetch("https://api.github.com/user", {
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": "myelin-core/1.0",
+        Accept: "application/vnd.github+json",
+      },
+    });
+    if (!res.ok) throw new Error(`GitHub API error: ${res.status}`);
+    return res.json() as Promise<GitHubUser>;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function upsertGitHubUser(db: Db, accessToken: string) {
   const githubUser = await fetchGitHubUser(accessToken);
 
-  const existing = await db
-    .select()
-    .from(users)
-    .where(eq(users.githubId, githubUser.id))
-    .limit(1);
+  // Retry loop handles username uniqueness collisions from concurrent inserts.
+  // onConflictDoUpdate on githubId makes same-user concurrent logins atomic.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const username = attempt === 0
+      ? await resolveUsername(db, githubUser.login)
+      : `${githubUser.login.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 24)}-${crypto.randomUUID().slice(0, 6)}`;
 
-  if (existing.length > 0) return existing[0];
+    try {
+      const [user] = await db
+        .insert(users)
+        .values({
+          id: crypto.randomUUID(),
+          username,
+          email: githubUser.email,
+          githubId: githubUser.id,
+          emailVerified: true,
+        })
+        .onConflictDoUpdate({
+          target: users.githubId,
+          set: { email: githubUser.email },
+        })
+        .returning();
 
-  const username = await resolveUsername(db, githubUser.login);
-  const [newUser] = await db
-    .insert(users)
-    .values({
-      id: crypto.randomUUID(),
-      username,
-      email: githubUser.email,
-      githubId: githubUser.id,
-      // GitHub OAuth means the email is already verified by GitHub
-      emailVerified: true,
-    })
-    .returning();
+      return user;
+    } catch (e: unknown) {
+      if (isUsernameConflict(e)) continue;
+      throw e;
+    }
+  }
 
-  return newUser;
+  throw new Error("Failed to create user after multiple attempts");
 }
 
 async function resolveUsername(db: Db, base: string): Promise<string> {

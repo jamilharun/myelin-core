@@ -279,6 +279,15 @@ router.openapi(editRoute, async (c) => {
     newDelta = calculateDelta(data.before ?? sub.before ?? 0, data.after ?? sub.after ?? 0);
   }
 
+  const nextHash = await contentHash(
+    sub.type,
+    (data.title ?? sub.title).toLowerCase().trim(),
+    data.code_before ?? sub.codeBefore ?? "",
+    data.code_after ?? sub.codeAfter ?? "",
+    data.cpu ?? sub.cpu ?? "",
+    sub.language ?? "",
+  );
+
   await db
     .update(submissions)
     .set({
@@ -292,6 +301,7 @@ router.openapi(editRoute, async (c) => {
       ...(data.code_before !== undefined && { codeBefore: data.code_before }),
       ...(data.code_after !== undefined && { codeAfter: data.code_after }),
       ...(data.tags !== undefined && { tags: data.tags }),
+      contentHash: nextHash,
       updatedAt: new Date(),
     })
     .where(eq(submissions.slug, slug));
@@ -428,22 +438,41 @@ router.openapi(upvoteRoute, async (c) => {
     return c.json({ error }, status as 403);
   }
 
-  const existing = await db
-    .select({ id: votes.id })
-    .from(votes)
-    .where(and(eq(votes.submissionId, sub[0].id), eq(votes.userId, user.id), eq(votes.type, "upvote")))
-    .limit(1);
+  const result = await db.transaction(async (tx) => {
+    const existing = await tx
+      .select({ id: votes.id })
+      .from(votes)
+      .where(and(eq(votes.submissionId, sub[0].id), eq(votes.userId, user.id), eq(votes.type, "upvote")))
+      .limit(1);
 
-  if (existing.length > 0) {
-    await db.delete(votes).where(eq(votes.id, existing[0].id));
-    await db.update(users).set({ reputation: sql`${users.reputation} - 5` }).where(eq(users.id, sub[0].userId));
-    return c.json({ upvoted: false }, 200);
-  }
+    if (existing.length > 0) {
+      const deleted = await tx
+        .delete(votes)
+        .where(eq(votes.id, existing[0].id))
+        .returning({ id: votes.id });
+      if (deleted.length > 0) {
+        await tx.update(users)
+          .set({ reputation: sql`${users.reputation} - 5` })
+          .where(eq(users.id, sub[0].userId));
+      }
+      return { upvoted: false as const };
+    }
 
-  await db.insert(votes).values({ id: crypto.randomUUID(), userId: user.id, submissionId: sub[0].id, type: "upvote" });
-  await db.update(users).set({ reputation: sql`${users.reputation} + 5` }).where(eq(users.id, sub[0].userId));
+    // uq_user_submission_vote fires if a concurrent insert wins — the whole
+    // transaction rolls back, so reputation is never touched.
+    await tx.insert(votes).values({
+      id: crypto.randomUUID(),
+      userId: user.id,
+      submissionId: sub[0].id,
+      type: "upvote",
+    });
+    await tx.update(users)
+      .set({ reputation: sql`${users.reputation} + 5` })
+      .where(eq(users.id, sub[0].userId));
+    return { upvoted: true as const };
+  });
 
-  return c.json({ upvoted: true }, 200);
+  return c.json(result, 200);
 });
 
 // ─── POST /submissions/:slug/flag ─────────────────────────────────────────────

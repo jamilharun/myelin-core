@@ -8,6 +8,7 @@ import {
   timestamp,
   doublePrecision,
   unique,
+  check,
 } from "drizzle-orm/pg-core";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -97,7 +98,10 @@ export const apiKeys = pgTable("api_keys", {
   readonlyEmail: text("readonly_email"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   lastUsedAt: timestamp("last_used_at"),
-});
+}, (table) => [
+  check("ck_write_key_has_owner", sql`${table.isReadonly} = true OR ${table.userId} IS NOT NULL`),
+  check("ck_anon_key_has_email", sql`${table.userId} IS NOT NULL OR ${table.readonlyEmail} IS NOT NULL`),
+]);
 
 export const submissions = pgTable("submissions", {
   id: text("id").primaryKey(),

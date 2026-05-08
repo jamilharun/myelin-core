@@ -7,7 +7,14 @@ const MAX_CODE = 50 * 1024;
 
 const sourceUrl = z
   .string()
-  .refine((v) => { try { new URL(v); return true; } catch { return false; } }, "Invalid URL")
+  .refine((v) => {
+    try {
+      const u = new URL(v);
+      return u.protocol === "http:" || u.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }, "Invalid URL")
   .optional();
 
 const optimizationSchema = z.object({
