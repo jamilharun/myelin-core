@@ -2,37 +2,22 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "myelin-core",
   "main": "src/index.ts",
-  "compatibility_date": "2026-04-27"
-  // "compatibility_flags": [
-  //   "nodejs_compat"
-  // ],
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "MY_KV_NAMESPACE",
-  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  //   }
-  // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
-  //   }
-  // ],
-  // "ai": {
-  //   "binding": "AI"
-  // },
-  // "observability": {
-  //   "enabled": true,
-  //   "head_sampling_rate": 1
-  // }
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Free Workers logging — view in Cloudflare dashboard → Workers → Logs
+  "observability": {
+    "enabled": true
+  }
+
+  // ─── Cloudflare dashboard config (not in wrangler.jsonc) ──────────────────
+  //
+  // Rate limiting (Security → WAF → Rate Limiting Rules):
+  //   POST /api/v1/submissions     → 5 req/hr per IP
+  //   POST /api/v1/*/comments      → 20 req/hr per IP
+  //   GET  /api/v1/*               → 1000 req/hr per IP (no key)
+  //
+  // These mirror the Upstash limits in src/lib/rate-limit.ts and act as a
+  // first-line filter before the Worker executes, saving CPU time on spam.
+  // ──────────────────────────────────────────────────────────────────────────
 }
