@@ -139,7 +139,11 @@ wrangler secret put SESSION_SECRET
 pnpm deploy
 ```
 
-> Before deploying for the first time, run `pnpm db:migrate` against your production Neon database to ensure the schema is applied.
+> Before deploying for the first time, apply migrations to your production Neon database. `.dev.vars` is not loaded by drizzle-kit outside of `wrangler dev`, so pass the production URL explicitly:
+>
+> ```bash
+> DATABASE_URL="postgresql://prod-user:prod-pass@ep-xxx.neon.tech/myelin?sslmode=require" pnpm db:migrate
+> ```
 
 ## Cloudflare dashboard setup (post-deploy)
 
