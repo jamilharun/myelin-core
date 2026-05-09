@@ -220,14 +220,10 @@ router.openapi(mineRoute, async (c) => {
     return c.json({ error }, status as 401);
   }
 
-  const isApiKey = c.get("isApiKey");
-  const apiKeyId = c.get("apiKeyId");
   const pagination = parsePagination(c.req.valid("query"));
   const db = createDb(c.env.DATABASE_URL);
 
-  const where = isApiKey && apiKeyId
-    ? and(eq(submissions.userId, user.id), eq(submissions.apiKeyId, apiKeyId))
-    : eq(submissions.userId, user.id);
+  const where = eq(submissions.userId, user.id);
 
   const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
