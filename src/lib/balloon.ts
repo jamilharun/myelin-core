@@ -3,10 +3,10 @@ import { submissions } from "../db/schema";
 import type { Db } from "../db/client";
 import type { AppRedis } from "./redis";
 
-const CAPACITY = 100;
+const CAPACITY = 500;
 const SUBMISSION_COST = 20;
 const COMMENT_COST = 5;
-const REFILL_PER_HOUR = 10;
+const REFILL_PER_HOUR = 100;
 
 const bKey = (userId: string) => `myelin:balloon:${userId}`;
 const flagKey = (userId: string) => `myelin:balloon:flags:${userId}`;

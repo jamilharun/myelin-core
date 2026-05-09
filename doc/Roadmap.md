@@ -54,13 +54,13 @@ These are not features — they are the operational prerequisites for a real dep
 
 | Item | Notes |
 |---|---|
-| Production deploy | `wrangler secret put` × 6 → `pnpm deploy` |
-| Production DB | `pnpm db:migrate` against Neon production branch |
-| Cloudflare WAF rules | Rate limiting rules per `doc/Setup.md` |
-| Domain | `myelin.sh` (to be confirmed) |
-| GitHub OAuth App (prod) | Separate app with production callback URL |
-| Balloon recovery script | Redis CLI one-liner to clear `myelin:balloon:{userId}` — needed before admin panel exists |
-| Seed content | Founder posts first 10–20 optimizations to bootstrap content |
+| ✅ Production deploy | Live at `https://myelin-core.jamilharun.workers.dev` |
+| ✅ Production DB | Schema migrated to Neon production branch |
+| 🔲 Cloudflare WAF rules | Blocked on custom domain — WAF rate limiting only works on proxied zones, not `workers.dev`. Set up after domain is live. |
+| 🔲 Domain | `myelin.sh` — deferred, using workers.dev for now. Required before WAF rules can be configured. |
+| ✅ GitHub OAuth App (prod) | Separate app with `workers.dev` callback URL |
+| 🔲 Balloon recovery script | Redis CLI one-liner to clear `myelin:balloon:{userId}` — needed before admin panel exists |
+| 🔲 Seed content | Founder posts first 10–20 optimizations to bootstrap content |
 
 ---
 
