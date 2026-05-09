@@ -508,7 +508,8 @@ router.openapi(upvoteRoute, async (c) => {
       .where(eq(users.id, sub[0].userId));
   }
 
-  return c.json({ upvoted: inserted.length > 0 }, 200);
+  // onConflictDoNothing fires on a concurrent insert — vote exists either way.
+  return c.json({ upvoted: true }, 200);
 });
 
 // ─── POST /submissions/:slug/flag ─────────────────────────────────────────────
