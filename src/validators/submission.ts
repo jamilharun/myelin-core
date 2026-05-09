@@ -64,16 +64,35 @@ export const createSubmissionSchema = z.discriminatedUnion("type", [
 
 export type CreateSubmissionInput = z.infer<typeof createSubmissionSchema>;
 
-export const editSubmissionSchema = z.object({
-  title: z.string().min(1).max(200).optional(),
-  body: z.string().max(5000).nullable().optional(),
-  before: z.number().positive().optional(),
-  after: z.number().positive().optional(),
-  metric: z.enum(METRIC).optional(),
-  cpu: z.string().min(1).optional(),
-  code_before: z.string().max(MAX_CODE).optional(),
-  code_after: z.string().max(MAX_CODE).optional(),
+const editBase = {
+  title: z.string().trim().min(1).max(200).optional(),
+  body: z.string().trim().max(5000).nullable().optional(),
   tags: z.array(z.string().max(30)).max(10).optional(),
-});
+};
+
+export const editSubmissionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("optimization"),
+    ...editBase,
+    before: z.number().positive().optional(),
+    after: z.number().positive().optional(),
+    metric: z.enum(METRIC).optional(),
+    cpu: z.string().trim().min(1).optional(),
+    code_before: z.string().trim().max(MAX_CODE).optional(),
+    code_after: z.string().trim().max(MAX_CODE).optional(),
+  }),
+  z.object({
+    type: z.literal("gotcha"),
+    ...editBase,
+    cpu: z.string().trim().min(1).optional(),
+    code_before: z.string().trim().max(MAX_CODE).optional(),
+    code_after: z.string().trim().max(MAX_CODE).optional(),
+  }),
+  z.object({
+    type: z.literal("snippet"),
+    ...editBase,
+    code_after: z.string().trim().max(MAX_CODE).optional(),
+  }),
+]);
 
 export type EditSubmissionInput = z.infer<typeof editSubmissionSchema>;

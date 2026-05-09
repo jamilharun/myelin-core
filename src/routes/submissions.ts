@@ -214,6 +214,12 @@ const mineRoute = createRoute({
 router.use("/submissions/mine", authenticate);
 router.openapi(mineRoute, async (c) => {
   const user = c.get("user");
+
+  if (!user) {
+    const { error, status } = apiError("UNAUTHORIZED", "Anonymous keys cannot access personal submissions.");
+    return c.json({ error }, status as 401);
+  }
+
   const isApiKey = c.get("isApiKey");
   const apiKeyId = c.get("apiKeyId");
   const pagination = parsePagination(c.req.valid("query"));
@@ -267,10 +273,25 @@ const statusRoute = createRoute({
 router.use("/submissions/:slug/status", authenticate);
 router.openapi(statusRoute, async (c) => {
   const { slug } = c.req.valid("param");
+  const user = c.get("user");
   const db = createDb(c.env.DATABASE_URL);
-  const row = await fetchOneBySlug(db, slug);
 
-  if (!row) {
+  const rows = await db
+    .select({
+      slug: submissions.slug,
+      status: submissions.status,
+      isCanonical: submissions.isCanonical,
+      version: submissions.version,
+      supersededBy: submissions.supersededBy,
+      userId: submissions.userId,
+    })
+    .from(submissions)
+    .where(eq(submissions.slug, slug))
+    .limit(1);
+
+  const row = rows[0];
+
+  if (!row || (row.status !== "approved" && (!user || row.userId !== user.id))) {
     const { error, status } = apiError("NOT_FOUND", "Submission not found.");
     return c.json({ error }, status as 404);
   }
@@ -384,7 +405,7 @@ router.openapi(bySlugRoute, async (c) => {
   const { history } = c.req.valid("query");
   const db = createDb(c.env.DATABASE_URL);
 
-  const row = await fetchOneBySlug(db, slug);
+  const row = await fetchOneBySlug(db, slug, eq(submissions.status, "approved"));
 
   if (!row) {
     const { error, status } = apiError("NOT_FOUND", "Submission not found.");

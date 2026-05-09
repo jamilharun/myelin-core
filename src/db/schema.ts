@@ -106,7 +106,9 @@ export const apiKeys = pgTable("api_keys", {
 export const submissions = pgTable("submissions", {
   id: text("id").primaryKey(),
   slug: text("slug").notNull().unique(),
-  canonicalSlug: text("canonical_slug").notNull(),
+  canonicalSlug: text("canonical_slug")
+    .notNull()
+    .references((): AnyPgColumn => submissions.slug),
   type: submissionTypeEnum("type").notNull(),
   title: varchar("title", { length: 200 }).notNull(),
   body: varchar("body", { length: 5000 }),
