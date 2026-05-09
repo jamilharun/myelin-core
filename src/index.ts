@@ -25,7 +25,7 @@ app.use("*", async (c, next) => {
   c.header("X-Content-Type-Options", "nosniff");
   c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
-  c.header("X-License", "CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/");
+  c.header("X-License", "CC BY 4.0 - https://creativecommons.org/licenses/by/4.0/");
 });
 
 // ─── Routes ───────────────────────────────────────────────────────────────────

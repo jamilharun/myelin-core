@@ -19,7 +19,8 @@ import { errorSchema, submissionSchema, validationHook } from "../lib/openapi-sc
 
 const router = new OpenAPIHono<AppEnv>({ defaultHook: validationHook });
 
-router.use("*", authenticate);
+router.use("/submissions", authenticate);
+router.use("/submissions/*", authenticate);
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
