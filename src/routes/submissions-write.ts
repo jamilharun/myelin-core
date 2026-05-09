@@ -19,7 +19,8 @@ import { errorSchema, submissionSchema, validationHook } from "../lib/openapi-sc
 
 const router = new OpenAPIHono<AppEnv>({ defaultHook: validationHook });
 
-router.use("*", authenticate);
+router.use("/submissions", authenticate);
+router.use("/submissions/*", authenticate);
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
@@ -148,88 +149,85 @@ router.openapi(createSubmissionRoute, async (c) => {
 
   const supersededSlug = "supersedes" in data ? (data.supersedes ?? null) : null;
 
-  let slug = "";
-  try {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      slug = attempt === 0
-        ? await generateUniqueSlug(data.title, db)
-        : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
+  // Resolve supersedes chain before slug generation so we can fail fast.
+  let version = 1;
+  let chainCanonicalSlug: string | null = null;
 
-      const id = crypto.randomUUID();
+  if (supersededSlug) {
+    const prev = await db
+      .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
+      .from(submissions)
+      .where(eq(submissions.slug, supersededSlug))
+      .limit(1);
 
-      try {
-        await db.transaction(async (tx) => {
-          let version = 1;
-          let canonicalSlug = slug;
-
-          if (supersededSlug) {
-            const prev = await tx
-              .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
-              .from(submissions)
-              .where(eq(submissions.slug, supersededSlug))
-              .limit(1);
-
-            if (prev.length === 0) throw new Error("SUPERSEDES_NOT_FOUND");
-
-            const [{ maxVersion }] = await tx
-              .select({ maxVersion: sql<number>`CAST(MAX(${submissions.version}) AS INT)` })
-              .from(submissions)
-              .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
-
-            version = (maxVersion ?? prev[0].version) + 1;
-            canonicalSlug = slug;
-
-            await tx
-              .update(submissions)
-              .set({ supersededBy: slug })
-              .where(eq(submissions.slug, supersededSlug));
-
-            await tx
-              .update(submissions)
-              .set({ canonicalSlug: slug, isCanonical: false })
-              .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
-          }
-
-          await tx.insert(submissions).values({
-            id,
-            slug,
-            canonicalSlug,
-            type: data.type,
-            title: data.title,
-            body: data.body ?? null,
-            codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
-            codeAfter: "code_after" in data ? data.code_after : null,
-            before: "before" in data ? data.before : null,
-            after: "after" in data ? data.after : null,
-            delta,
-            metric: "metric" in data ? data.metric : null,
-            cpu: "cpu" in data ? data.cpu : null,
-            simd: "simd" in data ? (data.simd ?? null) : null,
-            language: "language" in data ? data.language : null,
-            tags: data.tags,
-            sourceUrl: data.source_url ?? null,
-            supersedes: supersededSlug,
-            contentHash: hash,
-            status: newStatus,
-            version,
-            isCanonical: true,
-            userId: user.id,
-            apiKeyId: apiKeyId ?? null,
-          });
-        });
-
-        break; // insert succeeded — exit retry loop
-      } catch (e) {
-        if (attempt < 4 && isSlugConflict(e)) continue;
-        throw e;
-      }
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message === "SUPERSEDES_NOT_FOUND") {
+    if (prev.length === 0) {
       const { error, status } = apiError("NOT_FOUND", "The submission to supersede does not exist.");
       return c.json({ error }, status as 404);
     }
-    throw e;
+
+    const [{ maxVersion }] = await db
+      .select({ maxVersion: sql<number>`CAST(MAX(${submissions.version}) AS INT)` })
+      .from(submissions)
+      .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
+
+    version = (maxVersion ?? prev[0].version) + 1;
+    chainCanonicalSlug = prev[0].canonicalSlug;
+  }
+
+  let slug = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    slug = attempt === 0
+      ? await generateUniqueSlug(data.title, db)
+      : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
+
+    const id = crypto.randomUUID();
+
+    try {
+      await db.insert(submissions).values({
+        id,
+        slug,
+        canonicalSlug: slug,
+        type: data.type,
+        title: data.title,
+        body: data.body ?? null,
+        codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
+        codeAfter: "code_after" in data ? data.code_after : null,
+        before: "before" in data ? data.before : null,
+        after: "after" in data ? data.after : null,
+        delta,
+        metric: "metric" in data ? data.metric : null,
+        cpu: "cpu" in data ? data.cpu : null,
+        simd: "simd" in data ? (data.simd ?? null) : null,
+        language: "language" in data ? data.language : null,
+        tags: data.tags,
+        sourceUrl: data.source_url ?? null,
+        supersedes: supersededSlug,
+        contentHash: hash,
+        status: newStatus,
+        version,
+        isCanonical: true,
+        userId: user.id,
+        apiKeyId: apiKeyId ?? null,
+      });
+      break;
+    } catch (e) {
+      if (attempt < 4 && isSlugConflict(e)) continue;
+      throw e;
+    }
+  }
+
+  // Update old chain after insert succeeds. If these fail, the chain pointers
+  // need a cleanup pass — the new submission itself is always valid.
+  if (supersededSlug && chainCanonicalSlug) {
+    await db
+      .update(submissions)
+      .set({ supersededBy: slug })
+      .where(eq(submissions.slug, supersededSlug));
+
+    await db
+      .update(submissions)
+      .set({ canonicalSlug: slug, isCanonical: false })
+      .where(eq(submissions.canonicalSlug, chainCanonicalSlug));
   }
 
   return c.json(
@@ -484,41 +482,34 @@ router.openapi(upvoteRoute, async (c) => {
     return c.json({ error }, status as 403);
   }
 
-  const result = await db.transaction(async (tx) => {
-    const existing = await tx
-      .select({ id: votes.id })
-      .from(votes)
-      .where(and(eq(votes.submissionId, sub[0].id), eq(votes.userId, user.id), eq(votes.type, "upvote")))
-      .limit(1);
+  // Delete-first: if the vote existed we un-upvote; if not, we insert.
+  // The unique constraint (uq_user_submission_vote) handles concurrent inserts.
+  const deleted = await db
+    .delete(votes)
+    .where(and(eq(votes.submissionId, sub[0].id), eq(votes.userId, user.id), eq(votes.type, "upvote")))
+    .returning({ id: votes.id });
 
-    if (existing.length > 0) {
-      const deleted = await tx
-        .delete(votes)
-        .where(eq(votes.id, existing[0].id))
-        .returning({ id: votes.id });
-      if (deleted.length > 0) {
-        await tx.update(users)
-          .set({ reputation: sql`${users.reputation} - 5` })
-          .where(eq(users.id, sub[0].userId));
-      }
-      return { upvoted: false as const };
-    }
+  if (deleted.length > 0) {
+    await db.update(users)
+      .set({ reputation: sql`${users.reputation} - 5` })
+      .where(eq(users.id, sub[0].userId));
+    return c.json({ upvoted: false as const }, 200);
+  }
 
-    // uq_user_submission_vote fires if a concurrent insert wins — the whole
-    // transaction rolls back, so reputation is never touched.
-    await tx.insert(votes).values({
-      id: crypto.randomUUID(),
-      userId: user.id,
-      submissionId: sub[0].id,
-      type: "upvote",
-    });
-    await tx.update(users)
+  const inserted = await db
+    .insert(votes)
+    .values({ id: crypto.randomUUID(), userId: user.id, submissionId: sub[0].id, type: "upvote" })
+    .onConflictDoNothing()
+    .returning({ id: votes.id });
+
+  if (inserted.length > 0) {
+    await db.update(users)
       .set({ reputation: sql`${users.reputation} + 5` })
       .where(eq(users.id, sub[0].userId));
-    return { upvoted: true as const };
-  });
+  }
 
-  return c.json(result, 200);
+  // onConflictDoNothing fires on a concurrent insert — vote exists either way.
+  return c.json({ upvoted: true }, 200);
 });
 
 // ─── POST /submissions/:slug/flag ─────────────────────────────────────────────
