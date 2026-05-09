@@ -603,7 +603,7 @@ router.openapi(flagRoute, async (c) => {
   const flags = Number(flagCount[0]?.n ?? 0);
   const upvotes = Number(upvoteCount[0]?.n ?? 0);
 
-  if (flags === upvotes && flags > 0) {
+  if (flags === upvotes && flags > 0 && sub[0].status === "approved") {
     await db.update(submissions).set({ status: "pending" }).where(eq(submissions.id, sub[0].id));
   }
 
