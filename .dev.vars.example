@@ -1,0 +1,6 @@
+DATABASE_URL=postgresql://username:password@host.neon.tech/dbname?sslmode=require
+UPSTASH_REDIS_REST_URL=https://your-instance.upstash.io
+UPSTASH_REDIS_REST_TOKEN=your_token_here
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+SESSION_SECRET=a_random_32_char_string_minimum

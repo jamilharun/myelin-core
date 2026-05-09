@@ -1,0 +1,2 @@
+ALTER TABLE "api_keys" ADD CONSTRAINT "ck_write_key_has_owner" CHECK ("api_keys"."is_readonly" = true OR "api_keys"."user_id" IS NOT NULL);--> statement-breakpoint
+ALTER TABLE "api_keys" ADD CONSTRAINT "ck_anon_key_has_email" CHECK ("api_keys"."user_id" IS NOT NULL OR "api_keys"."readonly_email" IS NOT NULL);
