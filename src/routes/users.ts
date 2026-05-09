@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
 import { z } from "@hono/zod-openapi";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
 import { users, submissions } from "../db/schema";
@@ -42,33 +42,32 @@ router.openapi(userRoute, async (c) => {
   const { username } = c.req.valid("param");
   const db = createDb(c.env.DATABASE_URL);
 
-  const rows = await db
-    .select({
-      id: users.id,
-      username: users.username,
-      reputation: users.reputation,
-      createdAt: users.createdAt,
-      submissionCount: sql<number>`(
-        SELECT CAST(COUNT(*) AS INT) FROM ${submissions}
-        WHERE ${submissions.userId} = ${users.id}
-          AND ${submissions.status} = 'approved'
-          AND ${submissions.isCanonical} = true
-      )`,
-    })
+  const userRows = await db
+    .select({ id: users.id, username: users.username, reputation: users.reputation, createdAt: users.createdAt })
     .from(users)
     .where(eq(users.username, username))
     .limit(1);
 
-  if (rows.length === 0) {
+  if (userRows.length === 0) {
     const { error, status } = apiError("NOT_FOUND", "User not found.");
     return c.json({ error }, status as 404);
   }
 
-  const user = rows[0];
+  const user = userRows[0];
+
+  const [{ count }] = await db
+    .select({ count: sql<number>`CAST(COUNT(*) AS INT)` })
+    .from(submissions)
+    .where(and(
+      eq(submissions.userId, user.id),
+      eq(submissions.status, "approved"),
+      eq(submissions.isCanonical, true),
+    ));
+
   return c.json({
     username: user.username,
     reputation: user.reputation,
-    submission_count: Number(user.submissionCount),
+    submission_count: Number(count),
     member_since: user.createdAt,
   }, 200);
 });
