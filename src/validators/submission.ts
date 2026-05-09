@@ -66,7 +66,6 @@ export type CreateSubmissionInput = z.infer<typeof createSubmissionSchema>;
 
 const editBase = {
   title: z.string().trim().min(1).max(200).optional(),
-  body: z.string().trim().max(5000).nullable().optional(),
   tags: z.array(z.string().max(30)).max(10).optional(),
 };
 
@@ -74,16 +73,18 @@ export const editSubmissionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("optimization"),
     ...editBase,
+    body: z.string().trim().max(5000).optional(),
     before: z.number().positive().optional(),
     after: z.number().positive().optional(),
     metric: z.enum(METRIC).optional(),
     cpu: z.string().trim().min(1).optional(),
-    code_before: z.string().trim().max(MAX_CODE).optional(),
-    code_after: z.string().trim().max(MAX_CODE).optional(),
+    code_before: z.string().trim().min(1).max(MAX_CODE).optional(),
+    code_after: z.string().trim().min(1).max(MAX_CODE).optional(),
   }),
   z.object({
     type: z.literal("gotcha"),
     ...editBase,
+    body: z.string().trim().min(1).max(5000).optional(),
     cpu: z.string().trim().min(1).optional(),
     code_before: z.string().trim().max(MAX_CODE).optional(),
     code_after: z.string().trim().max(MAX_CODE).optional(),
@@ -91,7 +92,8 @@ export const editSubmissionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("snippet"),
     ...editBase,
-    code_after: z.string().trim().max(MAX_CODE).optional(),
+    body: z.string().trim().max(5000).optional(),
+    code_after: z.string().trim().min(1).max(MAX_CODE).optional(),
   }),
 ]);
 

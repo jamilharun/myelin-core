@@ -56,6 +56,7 @@ const createSubmissionRoute = createRoute({
     400: { content: { "application/json": { schema: errorSchema } }, description: "Validation error" },
     401: { content: { "application/json": { schema: errorSchema } }, description: "Not authenticated" },
     403: { content: { "application/json": { schema: errorSchema } }, description: "Forbidden" },
+    404: { content: { "application/json": { schema: errorSchema } }, description: "Superseded submission not found" },
     409: { content: { "application/json": { schema: errorSchema } }, description: "Exact duplicate" },
     429: { content: { "application/json": { schema: errorSchema } }, description: "Rate limited or balloon popped" },
   },
@@ -148,26 +149,28 @@ router.openapi(createSubmissionRoute, async (c) => {
   const supersededSlug = "supersedes" in data ? (data.supersedes ?? null) : null;
 
   let slug = "";
-  for (let attempt = 0; attempt < 5; attempt++) {
-    slug = attempt === 0
-      ? await generateUniqueSlug(data.title, db)
-      : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      slug = attempt === 0
+        ? await generateUniqueSlug(data.title, db)
+        : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
 
-    const id = crypto.randomUUID();
+      const id = crypto.randomUUID();
 
-    try {
-      await db.transaction(async (tx) => {
-        let version = 1;
-        let canonicalSlug = slug;
+      try {
+        await db.transaction(async (tx) => {
+          let version = 1;
+          let canonicalSlug = slug;
 
-        if (supersededSlug) {
-          const prev = await tx
-            .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
-            .from(submissions)
-            .where(eq(submissions.slug, supersededSlug))
-            .limit(1);
+          if (supersededSlug) {
+            const prev = await tx
+              .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
+              .from(submissions)
+              .where(eq(submissions.slug, supersededSlug))
+              .limit(1);
 
-          if (prev.length > 0) {
+            if (prev.length === 0) throw new Error("SUPERSEDES_NOT_FOUND");
+
             const [{ maxVersion }] = await tx
               .select({ maxVersion: sql<number>`CAST(MAX(${submissions.version}) AS INT)` })
               .from(submissions)
@@ -186,41 +189,47 @@ router.openapi(createSubmissionRoute, async (c) => {
               .set({ canonicalSlug: slug, isCanonical: false })
               .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
           }
-        }
 
-        await tx.insert(submissions).values({
-          id,
-          slug,
-          canonicalSlug,
-          type: data.type,
-          title: data.title,
-          body: data.body ?? null,
-          codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
-          codeAfter: "code_after" in data ? data.code_after : null,
-          before: "before" in data ? data.before : null,
-          after: "after" in data ? data.after : null,
-          delta,
-          metric: "metric" in data ? data.metric : null,
-          cpu: "cpu" in data ? data.cpu : null,
-          simd: "simd" in data ? (data.simd ?? null) : null,
-          language: "language" in data ? data.language : null,
-          tags: data.tags,
-          sourceUrl: data.source_url ?? null,
-          supersedes: supersededSlug,
-          contentHash: hash,
-          status: newStatus,
-          version,
-          isCanonical: true,
-          userId: user.id,
-          apiKeyId: apiKeyId ?? null,
+          await tx.insert(submissions).values({
+            id,
+            slug,
+            canonicalSlug,
+            type: data.type,
+            title: data.title,
+            body: data.body ?? null,
+            codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
+            codeAfter: "code_after" in data ? data.code_after : null,
+            before: "before" in data ? data.before : null,
+            after: "after" in data ? data.after : null,
+            delta,
+            metric: "metric" in data ? data.metric : null,
+            cpu: "cpu" in data ? data.cpu : null,
+            simd: "simd" in data ? (data.simd ?? null) : null,
+            language: "language" in data ? data.language : null,
+            tags: data.tags,
+            sourceUrl: data.source_url ?? null,
+            supersedes: supersededSlug,
+            contentHash: hash,
+            status: newStatus,
+            version,
+            isCanonical: true,
+            userId: user.id,
+            apiKeyId: apiKeyId ?? null,
+          });
         });
-      });
 
-      break; // insert succeeded — exit retry loop
-    } catch (e) {
-      if (attempt < 4 && isSlugConflict(e)) continue;
-      throw e;
+        break; // insert succeeded — exit retry loop
+      } catch (e) {
+        if (attempt < 4 && isSlugConflict(e)) continue;
+        throw e;
+      }
     }
+  } catch (e) {
+    if (e instanceof Error && e.message === "SUPERSEDES_NOT_FOUND") {
+      const { error, status } = apiError("NOT_FOUND", "The submission to supersede does not exist.");
+      return c.json({ error }, status as 404);
+    }
+    throw e;
   }
 
   return c.json(
