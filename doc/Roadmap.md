@@ -40,7 +40,7 @@ Issues found during V1 testing. None are blockers for initial launch, but the fi
 
 | Priority | Item | Detail |
 |---|---|---|
-| **High** | Switch DB driver back to neon-http, remove transactions | `neon-serverless` with `Pool` opens a WebSocket per request — bad at edge scale. Rewrite the two transaction usages instead: upvote already has a unique constraint; supersedes chain can be sequential queries. |
+| ~~**High**~~ ✅ | ~~Switch DB driver back to neon-http, remove transactions~~ | Done. Reverted to `neon-http`. Upvote uses delete-first pattern; supersedes chain uses sequential queries with post-insert chain updates. |
 | **High** | Atomic balloon deduction | `readState → compute → saveState` is not atomic. Two concurrent requests for the same user can both read the same value and both deduct. Fix with a Redis Lua script or `MULTI/EXEC`. |
 | **Medium** | Fix `mine` endpoint key filtering | When authenticated via API key, `mine` filters by `apiKeyId` — submissions made with a rotated key become invisible. Should filter by `userId` only. |
 | **Medium** | Flag-to-pending threshold | `flags === upvotes && flags > 0` triggers on 1 flag + 1 upvote. Threshold should be `flags >= N` (e.g. 3) regardless of upvote count. |
