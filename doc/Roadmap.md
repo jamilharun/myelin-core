@@ -34,6 +34,20 @@ Product: low-level development intelligence platform. Humans and agents post, fi
 
 ---
 
+## Known technical debt — fix before scale 🔲
+
+Issues found during V1 testing. None are blockers for initial launch, but the first two should be fixed before real traffic.
+
+| Priority | Item | Detail |
+|---|---|---|
+| ~~**High**~~ ✅ | ~~Switch DB driver back to neon-http, remove transactions~~ | Done. Reverted to `neon-http`. Upvote uses delete-first pattern; supersedes chain uses sequential queries with post-insert chain updates. |
+| **High** | Atomic balloon deduction | `readState → compute → saveState` is not atomic. Two concurrent requests for the same user can both read the same value and both deduct. Fix with a Redis Lua script or `MULTI/EXEC`. |
+| **Medium** | Fix `mine` endpoint key filtering | When authenticated via API key, `mine` filters by `apiKeyId` — submissions made with a rotated key become invisible. Should filter by `userId` only. |
+| **Medium** | Flag-to-pending threshold | `flags === upvotes && flags > 0` triggers on 1 flag + 1 upvote. Threshold should be `flags >= N` (e.g. 3) regardless of upvote count. |
+| **Low** | Integration tests for write pipeline | The pipeline has 9 ordered checks — regressions are invisible without automated tests. At minimum: duplicate rejection, balloon deduction, burst pop, supersedes chain integrity. |
+
+---
+
 ## Launch prep — before going public 🔲
 
 These are not features — they are the operational prerequisites for a real deployment.
