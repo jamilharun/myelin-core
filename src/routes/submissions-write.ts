@@ -584,18 +584,18 @@ router.openapi(flagRoute, async (c) => {
     return c.json({ error }, status as 403);
   }
 
-  const [flagCount, upvoteCount] = await Promise.all([
-    db.select({ n: sql<number>`CAST(COUNT(*) AS INT)` }).from(votes)
-      .where(and(eq(votes.submissionId, sub[0].id), eq(votes.type, "flag"))),
-    db.select({ n: sql<number>`CAST(COUNT(*) AS INT)` }).from(votes)
-      .where(and(eq(votes.submissionId, sub[0].id), eq(votes.type, "upvote"))),
-  ]);
+  const [flagCount] = await db
+    .select({ n: sql<number>`CAST(COUNT(*) AS INT)` })
+    .from(votes)
+    .where(and(eq(votes.submissionId, sub[0].id), eq(votes.type, "flag")));
 
-  const flags = Number(flagCount[0]?.n ?? 0);
-  const upvotes = Number(upvoteCount[0]?.n ?? 0);
+  const flags = Number(flagCount?.n ?? 0);
 
-  if (flags === upvotes && flags > 0 && sub[0].status === "approved") {
-    await db.update(submissions).set({ status: "pending" }).where(eq(submissions.id, sub[0].id));
+  if (flags >= 3) {
+    await db
+      .update(submissions)
+      .set({ status: "pending" })
+      .where(and(eq(submissions.id, sub[0].id), eq(submissions.status, "approved")));
   }
 
   const redis = createRedis(c.env);
