@@ -81,13 +81,12 @@ export async function fetchSubmissions(
   return { rows, total: countRows[0]?.count ?? 0 };
 }
 
-// Pull a single submission (any status) by slug, with counts + author
-export async function fetchOneBySlug(db: Db, slug: string) {
+export async function fetchOneBySlug(db: Db, slug: string, extra?: SQL) {
   const rows = await db
     .select(submissionCols)
     .from(submissions)
     .innerJoin(users, eq(submissions.userId, users.id))
-    .where(eq(submissions.slug, slug))
+    .where(extra ? and(eq(submissions.slug, slug), extra) : eq(submissions.slug, slug))
     .limit(1);
 
   return rows[0] ?? null;

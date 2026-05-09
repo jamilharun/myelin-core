@@ -7,7 +7,7 @@ import { submissions, users, comments, votes } from "../db/schema";
 import { apiError } from "../lib/errors";
 import { calculateDelta } from "../lib/delta";
 import { contentHash } from "../lib/hash";
-import { generateUniqueSlug } from "../lib/slug";
+import { generateUniqueSlug, titleToSlug, isSlugConflict } from "../lib/slug";
 import { formatSubmission } from "../lib/formatters";
 import { fetchOneBySlug } from "../lib/queries";
 import { checkAndDeduct, popBalloon, trackFlagReceived } from "../lib/balloon";
@@ -145,62 +145,83 @@ router.openapi(createSubmissionRoute, async (c) => {
 
   const newStatus = isApiKey || Number(approvedRow?.count ?? 0) >= 3 ? "approved" : "pending";
 
-  const slug = await generateUniqueSlug(data.title, db);
-  const id = crypto.randomUUID();
+  const supersededSlug = "supersedes" in data ? (data.supersedes ?? null) : null;
 
-  let version = 1;
-  let canonicalSlug = slug;
-  let supersededSlug: string | null = null;
+  let slug = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    slug = attempt === 0
+      ? await generateUniqueSlug(data.title, db)
+      : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
 
-  if ("supersedes" in data && data.supersedes) {
-    const prev = await db
-      .select()
-      .from(submissions)
-      .where(eq(submissions.slug, data.supersedes))
-      .limit(1);
+    const id = crypto.randomUUID();
 
-    if (prev.length > 0) {
-      supersededSlug = data.supersedes;
-      version = prev[0].version + 1;
+    try {
+      await db.transaction(async (tx) => {
+        let version = 1;
+        let canonicalSlug = slug;
 
-      await db
-        .update(submissions)
-        .set({ supersededBy: slug })
-        .where(eq(submissions.slug, supersededSlug));
+        if (supersededSlug) {
+          const prev = await tx
+            .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
+            .from(submissions)
+            .where(eq(submissions.slug, supersededSlug))
+            .limit(1);
 
-      await db
-        .update(submissions)
-        .set({ canonicalSlug: slug, isCanonical: false })
-        .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
+          if (prev.length > 0) {
+            const [{ maxVersion }] = await tx
+              .select({ maxVersion: sql<number>`CAST(MAX(${submissions.version}) AS INT)` })
+              .from(submissions)
+              .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
+
+            version = (maxVersion ?? prev[0].version) + 1;
+            canonicalSlug = slug;
+
+            await tx
+              .update(submissions)
+              .set({ supersededBy: slug })
+              .where(eq(submissions.slug, supersededSlug));
+
+            await tx
+              .update(submissions)
+              .set({ canonicalSlug: slug, isCanonical: false })
+              .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
+          }
+        }
+
+        await tx.insert(submissions).values({
+          id,
+          slug,
+          canonicalSlug,
+          type: data.type,
+          title: data.title,
+          body: data.body ?? null,
+          codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
+          codeAfter: "code_after" in data ? data.code_after : null,
+          before: "before" in data ? data.before : null,
+          after: "after" in data ? data.after : null,
+          delta,
+          metric: "metric" in data ? data.metric : null,
+          cpu: "cpu" in data ? data.cpu : null,
+          simd: "simd" in data ? (data.simd ?? null) : null,
+          language: "language" in data ? data.language : null,
+          tags: data.tags,
+          sourceUrl: data.source_url ?? null,
+          supersedes: supersededSlug,
+          contentHash: hash,
+          status: newStatus,
+          version,
+          isCanonical: true,
+          userId: user.id,
+          apiKeyId: apiKeyId ?? null,
+        });
+      });
+
+      break; // insert succeeded — exit retry loop
+    } catch (e) {
+      if (attempt < 4 && isSlugConflict(e)) continue;
+      throw e;
     }
   }
-
-  await db.insert(submissions).values({
-    id,
-    slug,
-    canonicalSlug,
-    type: data.type,
-    title: data.title,
-    body: data.body ?? null,
-    codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
-    codeAfter: "code_after" in data ? data.code_after : null,
-    before: "before" in data ? data.before : null,
-    after: "after" in data ? data.after : null,
-    delta,
-    metric: "metric" in data ? data.metric : null,
-    cpu: "cpu" in data ? data.cpu : null,
-    simd: "simd" in data ? (data.simd ?? null) : null,
-    language: "language" in data ? data.language : null,
-    tags: data.tags,
-    sourceUrl: data.source_url ?? null,
-    supersedes: supersededSlug,
-    contentHash: hash,
-    status: newStatus,
-    version,
-    isCanonical: true,
-    userId: user.id,
-    apiKeyId: apiKeyId ?? null,
-  });
 
   return c.json(
     { status: "created" as const, slug, is_canonical: true, supersedes: supersededSlug, url: `/s/${slug}` },
@@ -269,38 +290,54 @@ router.openapi(editRoute, async (c) => {
 
   const data = c.req.valid("json");
 
-  if (Object.keys(data).length === 0) {
+  // `type` is always present after discriminated union parsing — only reject if no other field provided
+  const { type: _type, ...dataWithoutType } = data;
+  if (Object.keys(dataWithoutType).length === 0) {
     const { error, status } = apiError("VALIDATION_ERROR", "No fields provided to update.");
     return c.json({ error }, status as 400);
   }
 
   let newDelta = sub.delta;
-  if ((data.before !== undefined || data.after !== undefined) && sub.type === "optimization") {
+  if (data.type === "optimization" && (data.before !== undefined || data.after !== undefined)) {
     newDelta = calculateDelta(data.before ?? sub.before ?? 0, data.after ?? sub.after ?? 0);
   }
 
   const nextHash = await contentHash(
     sub.type,
     (data.title ?? sub.title).toLowerCase().trim(),
-    data.code_before ?? sub.codeBefore ?? "",
-    data.code_after ?? sub.codeAfter ?? "",
-    data.cpu ?? sub.cpu ?? "",
+    ("code_before" in data ? data.code_before : undefined) ?? sub.codeBefore ?? "",
+    ("code_after" in data ? data.code_after : undefined) ?? sub.codeAfter ?? "",
+    ("cpu" in data ? data.cpu : undefined) ?? sub.cpu ?? "",
     sub.language ?? "",
   );
+
+  const typeSpecificSet = data.type === "optimization"
+    ? {
+        ...(data.before !== undefined && { before: data.before }),
+        ...(data.after !== undefined && { after: data.after }),
+        ...(newDelta !== sub.delta && { delta: newDelta }),
+        ...(data.metric !== undefined && { metric: data.metric }),
+        ...(data.cpu !== undefined && { cpu: data.cpu }),
+        ...(data.code_before !== undefined && { codeBefore: data.code_before }),
+        ...(data.code_after !== undefined && { codeAfter: data.code_after }),
+      }
+    : data.type === "gotcha"
+    ? {
+        ...(data.cpu !== undefined && { cpu: data.cpu }),
+        ...(data.code_before !== undefined && { codeBefore: data.code_before }),
+        ...(data.code_after !== undefined && { codeAfter: data.code_after }),
+      }
+    : {
+        ...(data.code_after !== undefined && { codeAfter: data.code_after }),
+      };
 
   await db
     .update(submissions)
     .set({
       ...(data.title !== undefined && { title: data.title }),
       ...(data.body !== undefined && { body: data.body }),
-      ...(data.before !== undefined && { before: data.before }),
-      ...(data.after !== undefined && { after: data.after }),
-      ...(newDelta !== sub.delta && { delta: newDelta }),
-      ...(data.metric !== undefined && { metric: data.metric }),
-      ...(data.cpu !== undefined && { cpu: data.cpu }),
-      ...(data.code_before !== undefined && { codeBefore: data.code_before }),
-      ...(data.code_after !== undefined && { codeAfter: data.code_after }),
       ...(data.tags !== undefined && { tags: data.tags }),
+      ...typeSpecificSet,
       contentHash: nextHash,
       updatedAt: new Date(),
     })
@@ -530,24 +567,22 @@ router.openapi(flagRoute, async (c) => {
     return c.json({ error }, status as 404);
   }
 
-  const existingFlag = await db
-    .select({ id: votes.id })
-    .from(votes)
-    .where(and(eq(votes.submissionId, sub[0].id), eq(votes.userId, user.id), eq(votes.type, "flag")))
-    .limit(1);
+  const inserted = await db
+    .insert(votes)
+    .values({
+      id: crypto.randomUUID(),
+      userId: user.id,
+      submissionId: sub[0].id,
+      type: "flag",
+      reason,
+    })
+    .onConflictDoNothing()
+    .returning({ id: votes.id });
 
-  if (existingFlag.length > 0) {
+  if (inserted.length === 0) {
     const { error, status } = apiError("FORBIDDEN", "You have already flagged this submission.");
     return c.json({ error }, status as 403);
   }
-
-  await db.insert(votes).values({
-    id: crypto.randomUUID(),
-    userId: user.id,
-    submissionId: sub[0].id,
-    type: "flag",
-    reason,
-  });
 
   const [flagCount, upvoteCount] = await Promise.all([
     db.select({ n: sql<number>`CAST(COUNT(*) AS INT)` }).from(votes)

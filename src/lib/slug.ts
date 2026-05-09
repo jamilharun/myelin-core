@@ -2,6 +2,10 @@ import { like } from "drizzle-orm";
 import { submissions } from "../db/schema";
 import type { Db } from "../db/client";
 
+export function isSlugConflict(e: unknown): boolean {
+  return e instanceof Error && e.message.includes("submissions_slug_unique");
+}
+
 export function titleToSlug(title: string): string {
   return title
     .toLowerCase()

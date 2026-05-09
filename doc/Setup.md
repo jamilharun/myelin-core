@@ -22,9 +22,11 @@ pnpm install
 1. Create a new project at [console.neon.tech](https://console.neon.tech)
 2. Create a database (name it `myelin` or anything you like)
 3. Copy the **connection string** from the dashboard — it looks like:
+
    ```text
    postgresql://username:password@ep-xxx.us-east-2.aws.neon.tech/myelin?sslmode=require
    ```
+
 
 ## 3. Set up Upstash (Redis)
 
@@ -60,7 +62,13 @@ UPSTASH_REDIS_REST_URL=https://your-instance.upstash.io
 UPSTASH_REDIS_REST_TOKEN=your_token_here
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
-SESSION_SECRET=any_random_32_char_string
+SESSION_SECRET=<cryptographically random, 32+ bytes — see below>
+```
+
+Generate a secure `SESSION_SECRET`:
+
+```bash
+openssl rand -base64 48
 ```
 
 > `.dev.vars` is gitignored. Never commit it.

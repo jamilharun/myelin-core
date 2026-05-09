@@ -1,0 +1,1 @@
+ALTER TABLE "submissions" ADD CONSTRAINT "submissions_canonical_slug_submissions_slug_fk" FOREIGN KEY ("canonical_slug") REFERENCES "public"."submissions"("slug") ON DELETE no action ON UPDATE no action;
