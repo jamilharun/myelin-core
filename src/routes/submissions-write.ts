@@ -591,8 +591,11 @@ router.openapi(flagRoute, async (c) => {
 
   const flags = Number(flagCount?.n ?? 0);
 
-  if (flags >= 3 && sub[0].status === "approved") {
-    await db.update(submissions).set({ status: "pending" }).where(eq(submissions.id, sub[0].id));
+  if (flags >= 3) {
+    await db
+      .update(submissions)
+      .set({ status: "pending" })
+      .where(and(eq(submissions.id, sub[0].id), eq(submissions.status, "approved")));
   }
 
   const redis = createRedis(c.env);
