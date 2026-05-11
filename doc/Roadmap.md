@@ -124,8 +124,6 @@ These are separate repositories — listed here for context.
 | Project | Description | Depends on |
 |---|---|---|
 | `myelin-web` | Frontend — submit form, live delta calculator, browse UI | V1 API |
-| Assembly Browser | Exploration tool for compiler output and ASM diffs | V1.5 API |
-| `myelin-agent` | Reference agent that reads, benchmarks, and writes back | V1 API + API keys |
 
 ---
 
