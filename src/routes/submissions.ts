@@ -258,6 +258,12 @@ const queueRoute = createRoute({
 router.use("/submissions/queue", authenticate);
 router.openapi(queueRoute, async (c) => {
   const user = c.get("user");
+
+  if (!user) {
+    const { error, status } = apiError("UNAUTHORIZED", "Anonymous keys cannot access personal submissions.");
+    return c.json({ error }, status as 401);
+  }
+
   const pagination = parsePagination(c.req.valid("query"));
   const db = createDb(c.env.DATABASE_URL);
 
@@ -443,6 +449,7 @@ const historyRoute = createRoute({
       },
       description: "Paginated edit history (newest first)",
     },
+    401: { content: { "application/json": { schema: errorSchema } }, description: "Not authenticated" },
     403: { content: { "application/json": { schema: errorSchema } }, description: "Not the owner" },
     404: { content: { "application/json": { schema: errorSchema } }, description: "Not found" },
   },
@@ -452,6 +459,12 @@ router.use("/submissions/:slug/history", authenticate);
 router.openapi(historyRoute, async (c) => {
   const { slug } = c.req.valid("param");
   const user = c.get("user");
+
+  if (!user) {
+    const { error, status } = apiError("UNAUTHORIZED", "Anonymous keys cannot access edit history.");
+    return c.json({ error }, status as 401);
+  }
+
   const pagination = parsePagination(c.req.valid("query"));
   const db = createDb(c.env.DATABASE_URL);
 

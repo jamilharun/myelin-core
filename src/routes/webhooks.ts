@@ -1,12 +1,13 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
 import { webhooks } from "../db/schema";
 import { authenticate } from "../auth/middleware";
 import { apiError } from "../lib/errors";
 import { encryptWebhookSecret } from "../lib/webhook-crypto";
-import { errorSchema, validationHook } from "../lib/openapi-schemas";
+import { parsePagination, paginatedResponse, setPaginationHeaders } from "../lib/pagination";
+import { errorSchema, paginationQuerySchema, validationHook } from "../lib/openapi-schemas";
 
 const router = new OpenAPIHono<AppEnv>({ defaultHook: validationHook });
 
@@ -102,11 +103,18 @@ const listRoute = createRoute({
   tags: ["Webhooks"],
   summary: "List your registered webhooks",
   security: [{ bearerAuth: [] }],
+  request: { query: paginationQuerySchema },
   responses: {
     200: {
       content: {
         "application/json": {
-          schema: z.object({ data: z.array(webhookSchema) }),
+          schema: z.object({
+            data: z.array(webhookSchema),
+            page: z.number().int(),
+            limit: z.number().int(),
+            total_pages: z.number().int(),
+            total: z.number().int(),
+          }),
         },
       },
       description: "Active and inactive webhooks — secret is never returned",
@@ -117,29 +125,39 @@ const listRoute = createRoute({
 
 router.openapi(listRoute, async (c) => {
   const user = c.get("user");
+  const pagination = parsePagination(c.req.valid("query"));
   const db = createDb(c.env.DATABASE_URL);
+  const offset = (pagination.page - 1) * pagination.limit;
 
-  const rows = await db
-    .select({
-      id: webhooks.id,
-      url: webhooks.url,
-      events: webhooks.events,
-      active: webhooks.active,
-      createdAt: webhooks.createdAt,
-    })
-    .from(webhooks)
-    .where(eq(webhooks.userId, user.id))
-    .orderBy(webhooks.createdAt);
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({
+        id: webhooks.id,
+        url: webhooks.url,
+        events: webhooks.events,
+        active: webhooks.active,
+        createdAt: webhooks.createdAt,
+      })
+      .from(webhooks)
+      .where(eq(webhooks.userId, user.id))
+      .orderBy(webhooks.createdAt)
+      .limit(pagination.limit)
+      .offset(offset),
+    db
+      .select({ total: sql<number>`CAST(COUNT(*) AS INT)` })
+      .from(webhooks)
+      .where(eq(webhooks.userId, user.id)),
+  ]);
 
-  return c.json({
-    data: rows.map((r) => ({
-      id: r.id,
-      url: r.url,
-      events: r.events,
-      active: r.active,
-      created_at: r.createdAt,
-    })),
-  }, 200);
+  setPaginationHeaders(c, total);
+  return c.json(
+    paginatedResponse(
+      rows.map((r) => ({ id: r.id, url: r.url, events: r.events, active: r.active, created_at: r.createdAt })),
+      total,
+      pagination
+    ),
+    200
+  );
 });
 
 export default router;
