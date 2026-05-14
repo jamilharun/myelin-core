@@ -1,9 +1,9 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, sql, desc } from "drizzle-orm";
 import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
-import { submissions, users, comments } from "../db/schema";
-import { parsePagination, paginatedResponse } from "../lib/pagination";
+import { submissions, users, comments, editHistory } from "../db/schema";
+import { parsePagination, paginatedResponse, setPaginationHeaders } from "../lib/pagination";
 import { apiError } from "../lib/errors";
 import { formatSubmission } from "../lib/formatters";
 import {
@@ -26,7 +26,7 @@ const router = new OpenAPIHono<AppEnv>();
 
 const VALID_SORTS = ["date", "delta", "upvotes", "version"] as const;
 const VALID_DIRS = ["asc", "desc"] as const;
-const VALID_TYPES = ["optimization", "gotcha", "snippet"] as const;
+const VALID_TYPES = ["optimization", "gotcha", "snippet", "fix", "benchmark", "compiler_note", "compatibility"] as const;
 
 // ─── Feed ─────────────────────────────────────────────────────────────────────
 
@@ -51,6 +51,7 @@ router.openapi(feedRoute, async (c) => {
   const where = and(eq(submissions.status, "approved"), eq(submissions.isCanonical, true));
   const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
 
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
@@ -103,6 +104,7 @@ router.openapi(listRoute, async (c) => {
     buildOrderBy(sort, dir)
   );
 
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
@@ -145,6 +147,7 @@ router.openapi(gotchasRoute, async (c) => {
     buildOrderBy()
   );
 
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
@@ -187,6 +190,7 @@ router.openapi(snippetsRoute, async (c) => {
     buildOrderBy()
   );
 
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
@@ -226,6 +230,40 @@ router.openapi(mineRoute, async (c) => {
   const where = eq(submissions.userId, user.id);
 
   const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
+  setPaginationHeaders(c, total);
+  return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
+});
+
+// ─── Queue (pending submissions for caller) ───────────────────────────────────
+
+const queueRoute = createRoute({
+  method: "get",
+  path: "/submissions/queue",
+  tags: ["Submissions"],
+  summary: "Pending submissions by the authenticated user — use to avoid resubmitting before approval",
+  security: [{ bearerAuth: [] }],
+  request: { query: paginationQuerySchema },
+  responses: {
+    200: {
+      content: { "application/json": { schema: paginatedSubmissionSchema } },
+      description: "Caller's pending submissions",
+    },
+    401: {
+      content: { "application/json": { schema: errorSchema } },
+      description: "Not authenticated",
+    },
+  },
+});
+
+router.use("/submissions/queue", authenticate);
+router.openapi(queueRoute, async (c) => {
+  const user = c.get("user");
+  const pagination = parsePagination(c.req.valid("query"));
+  const db = createDb(c.env.DATABASE_URL);
+
+  const where = and(eq(submissions.userId, user.id), eq(submissions.status, "pending"));
+  const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
@@ -370,7 +408,93 @@ router.openapi(commentsRoute, async (c) => {
     created_at: r.createdAt,
   }));
 
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(formatted, total, pagination), 200);
+});
+
+// ─── Edit history ─────────────────────────────────────────────────────────────
+
+const historyRoute = createRoute({
+  method: "get",
+  path: "/submissions/:slug/history",
+  tags: ["Submissions"],
+  summary: "Edit history for a submission (owner only)",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: z.object({ slug: z.string() }),
+    query: paginationQuerySchema,
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(z.object({
+              id: z.string(),
+              snapshot: z.record(z.string(), z.unknown()),
+              edited_at: z.date(),
+            })),
+            page: z.number().int(),
+            limit: z.number().int(),
+            total_pages: z.number().int(),
+            total: z.number().int(),
+          }),
+        },
+      },
+      description: "Paginated edit history (newest first)",
+    },
+    403: { content: { "application/json": { schema: errorSchema } }, description: "Not the owner" },
+    404: { content: { "application/json": { schema: errorSchema } }, description: "Not found" },
+  },
+});
+
+router.use("/submissions/:slug/history", authenticate);
+router.openapi(historyRoute, async (c) => {
+  const { slug } = c.req.valid("param");
+  const user = c.get("user");
+  const pagination = parsePagination(c.req.valid("query"));
+  const db = createDb(c.env.DATABASE_URL);
+
+  const sub = await db
+    .select({ id: submissions.id, userId: submissions.userId })
+    .from(submissions)
+    .where(eq(submissions.slug, slug))
+    .limit(1);
+
+  if (sub.length === 0) {
+    const { error, status } = apiError("NOT_FOUND", "Submission not found.");
+    return c.json({ error }, status as 404);
+  }
+
+  if (sub[0].userId !== user.id) {
+    const { error, status } = apiError("FORBIDDEN", "Edit history is only visible to the submission owner.");
+    return c.json({ error }, status as 403);
+  }
+
+  const offset = (pagination.page - 1) * pagination.limit;
+
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({ id: editHistory.id, snapshot: editHistory.snapshot, createdAt: editHistory.createdAt })
+      .from(editHistory)
+      .where(eq(editHistory.submissionId, sub[0].id))
+      .orderBy(desc(editHistory.createdAt))
+      .limit(pagination.limit)
+      .offset(offset),
+    db
+      .select({ total: sql<number>`CAST(COUNT(*) AS INT)` })
+      .from(editHistory)
+      .where(eq(editHistory.submissionId, sub[0].id)),
+  ]);
+
+  return c.json(
+    paginatedResponse(
+      rows.map((r) => ({ id: r.id, snapshot: r.snapshot as Record<string, unknown>, edited_at: r.createdAt })),
+      total,
+      pagination
+    ),
+    200
+  );
 });
 
 // ─── Single submission by slug ────────────────────────────────────────────────

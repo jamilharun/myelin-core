@@ -9,6 +9,13 @@ export function parsePagination(query: { page?: string; limit?: string }): Pagin
   return { page, limit };
 }
 
+export function setPaginationHeaders(
+  c: { header: (key: string, value: string) => void },
+  total: number
+) {
+  c.header("X-Total-Count", String(total));
+}
+
 export function paginatedResponse<T>(
   data: T[],
   total: number,

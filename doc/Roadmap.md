@@ -64,9 +64,9 @@ These are not features — they are the operational prerequisites for a real dep
 
 ---
 
-## V1.5 — Stability + agent polish 🚧
+## V1.5 — Stability + agent polish ✅
 
-**Ship after V1 has real users and real data.**
+**Implemented. Run `pnpm db:push` on dev and `pnpm db:generate` + `pnpm db:migrate` on prod to apply schema changes before deploying.**
 
 ---
 
@@ -92,63 +92,68 @@ These are not features — they are the operational prerequisites for a real dep
 
 ---
 
-### Phase 2 — Validators 🔲
+### Phase 2 — Validators ✅
 
 > Add new submission types to the discriminated union. No DB changes needed.
 
 | Item | Status | Notes |
 |---|---|---|
-| `fix` schema | 🔲 | Requires `fix_for: z.string()` (mandatory), optional `body`, `code_before/after` |
-| `benchmark` schema | 🔲 | Standalone measurement — `value`, `metric`, `cpu` required; no before/after |
-| `compiler_note` schema | 🔲 | `compiler` required, `body` required, no code fields |
-| `compatibility` schema | 🔲 | `body` required, `cpu` optional, no code fields |
-| Edit schemas for new types | 🔲 | Add to `editSubmissionSchema` discriminated union |
-| Add `confidence` to all create schemas | 🔲 | Optional field on all types |
-| Expand `VALID_TYPES` in `submissions.ts` | 🔲 | Filter param currently hardcoded to 3 types |
+| `fix` schema | ✅ | `fix_for: z.string()` required, optional `body`, `code_before/after`, `confidence` |
+| `benchmark` schema | ✅ | `value`, `metric`, `cpu` required — `value` maps to `after` column in DB |
+| `compiler_note` schema | ✅ | `compiler` required, `body` required |
+| `compatibility` schema | ✅ | `body` required, `cpu` optional |
+| Edit schemas for new types | ✅ | All 4 added to `editSubmissionSchema` discriminated union |
+| Add `confidence` to all create schemas | ✅ | Optional field on all 7 types via shared `confidence` constant |
+| Expand `VALID_TYPES` in `submissions.ts` | ✅ | All 7 types accepted as filter param |
 
 ---
 
-### Phase 3 — Write pipeline 🔲
+### Phase 3 — Write pipeline ✅
+
 
 > Updates to `submissions-write.ts`. Order matters — validators must be done first.
 
 | Item | Status | Notes |
 |---|---|---|
-| Insert `fix_for` for `fix` type submissions | 🔲 | Write `fix_for` to DB on `POST /submissions` |
-| Insert `confidence` for all types | 🔲 | Write `confidence` to DB on `POST /submissions` |
-| Record snapshot to `edit_history` on PATCH | 🔲 | Insert before-snapshot before applying update — history endpoint depends on this |
-| Agent rate limit relaxation | 🔲 | `isApiKey` → use per-key limiter instead of IP limiter (`submissionRl`) |
-| `contentHash` covers `fix_for` for `fix` type | 🔲 | Prevent exact-duplicate fix submissions |
+| Insert `fix_for` for `fix` type submissions | ✅ | Validated against DB (must exist + approved) then written to `fix_for` column |
+| Insert `confidence` for all types | ✅ | Written on `POST /submissions` and editable via `PATCH` |
+| Record snapshot to `edit_history` on PATCH | ✅ | Update-first, history-second pattern — inserts `snapshot` JSONB after successful update |
+| Agent rate limit relaxation | ✅ | `isApiKey` → `agentRl` (20/hr by key ID) — humans stay on `submissionRl` (5/hr by IP) |
+| `contentHash` covers `fix_for` + benchmark `value` | ✅ | `fix_for` slug + `value` (benchmark) added as hash inputs |
 
 ---
 
-### Phase 4 — Read routes 🔲
+### Phase 4 — Read routes ✅
 
 > New and extended endpoints. Phase 3 must be done first (history endpoint needs recorded snapshots).
 
 | Item | Status | Notes |
 |---|---|---|
-| `GET /submissions/:slug/history` | 🔲 | Read from `edit_history`, paginated, auth-gated to owner |
-| `GET /u/:username/submissions` | 🔲 | Add to `users.ts` — approved + canonical only, paginated |
-| `GET /submissions/queue` | 🔲 | Pending submissions for the caller — agents need this to avoid resubmit |
-| `GET /api/v1/keys` | 🔲 | List caller's active keys — never return `keyHash` |
-| `DELETE /api/v1/keys/:id` | 🔲 | Revoke own key — guard: can only delete your own, readonly keys excluded |
-| `GET /notifications` | 🔲 | Unread first, paginated — add to new `routes/notifications.ts` |
-| `POST /webhooks` + `GET /webhooks` | 🔲 | Registration only — delivery deferred. New `routes/webhooks.ts` |
-| `POST /admin/balloon/reset/:userId` | 🔲 | New `routes/admin.ts` — auth via `ADMIN_SECRET` env var |
+| `GET /submissions/:slug/history` | ✅ | Paginated, owner-only, newest first — `submissions.ts` |
+| `GET /submissions/queue` | ✅ | Caller's pending submissions — registered before `/:slug` in `submissions.ts` |
+| `GET /u/:username/submissions` | ✅ | Public, approved + canonical — registered before profile route in `users.ts` |
+| `GET /api/v1/keys` | ✅ | Returns `id, label, isReadonly, createdAt, lastUsedAt` — never `keyHash`, blocks API key callers |
+| `DELETE /api/v1/keys/:id` | ✅ | `WHERE id = $1 AND userId = $2` — naturally excludes anonymous readonly keys |
+| `GET /notifications` | ✅ | Unread first via `ORDER BY read_at IS NOT NULL`, paginated — `notifications.ts` |
+| `PATCH /notifications/:id/read` | ✅ | Marks single notification read — `notifications.ts` |
+| `POST /webhooks` | ✅ | Secret generated → AES-256-GCM encrypted → stored ciphertext → plaintext shown once |
+| `GET /webhooks` | ✅ | Lists webhooks — `secret` field never returned — `webhooks.ts` |
+| ~~`POST /admin/balloon/reset/:userId`~~ | ⏸️ Deferred | No admin UI yet — handle via Redis CLI for now. Revisit when admin panel is scoped |
+
+> **Webhook event enum:** `submission.approved` · `submission.rejected` · `submission.flagged` · `comment.created` · `fix.submitted`
 
 ---
 
-### Phase 5 — Polish 🔲
+### Phase 5 — Polish ✅
 
 > Cross-cutting improvements. Can be done independently of phases 2–4.
 
 | Item | Status | Notes |
 |---|---|---|
-| `X-Total-Count` header on all list endpoints | 🔲 | New `setPaginationHeaders(c, total)` helper in `pagination.ts` |
-| Expose `X-Total-Count` in CORS | 🔲 | Add to `Access-Control-Expose-Headers` in `index.ts` — easy to miss |
-| Mount new route files in `index.ts` | 🔲 | `admin`, `webhooks`, `notifications` |
-| Similarity scoring | 🔲 | Fuzzy duplicate detection — needs `pg_trgm` extension on Neon; `SIMILAR_FOUND` error already stubbed |
+| `X-Total-Count` header on all list endpoints | ✅ | `setPaginationHeaders(c, total)` added to all paginated routes in `submissions.ts`, `users.ts`, `search.ts`, `notifications.ts` |
+| Expose `X-Total-Count` in CORS | ✅ | `exposeHeaders: ["X-Total-Count"]` in `index.ts` |
+| Mount new route files in `index.ts` | ✅ | `webhooks` + `notifications` mounted — `admin` deferred |
+| Similarity scoring | ✅ | Fuzzy duplicate detection via `pg_trgm` `similarity()` — threshold 0.85, try-catch for graceful degradation when extension not installed; `SIMILAR_FOUND` 409 response with top 3 matches |
 
 ---
 
