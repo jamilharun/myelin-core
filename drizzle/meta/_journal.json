@@ -22,6 +22,13 @@
       "when": 1778286766408,
       "tag": "0002_perfect_living_tribunal",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778744049489,
+      "tag": "0003_curly_scarlet_witch",
+      "breakpoints": true
     }
   ]
 }

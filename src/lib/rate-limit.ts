@@ -16,3 +16,7 @@ export const burstRl = (redis: AppRedis) =>
 // 20 comments per hour per IP
 export const commentRl = (redis: AppRedis) =>
   new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(20, "1 h"), prefix: "myelin:rl:comment" });
+
+// 20 submissions per hour per agent key — keyed by apiKeyId, not IP
+export const agentRl = (redis: AppRedis) =>
+  new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(20, "1 h"), prefix: "myelin:rl:agent" });

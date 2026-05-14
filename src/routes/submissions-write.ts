@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
 import { createRedis } from "../lib/redis";
-import { submissions, users, comments, votes } from "../db/schema";
+import { submissions, users, comments, votes, editHistory } from "../db/schema";
 import { apiError } from "../lib/errors";
 import { calculateDelta } from "../lib/delta";
 import { contentHash } from "../lib/hash";
@@ -11,7 +11,7 @@ import { generateUniqueSlug, titleToSlug, isSlugConflict } from "../lib/slug";
 import { formatSubmission } from "../lib/formatters";
 import { fetchOneBySlug } from "../lib/queries";
 import { checkAndDeduct, popBalloon, trackFlagReceived } from "../lib/balloon";
-import { submissionRl, newAccountRl, burstRl, commentRl } from "../lib/rate-limit";
+import { submissionRl, newAccountRl, burstRl, commentRl, agentRl } from "../lib/rate-limit";
 import { authenticate } from "../auth/middleware"; // used by router.use("*", authenticate)
 import { createSubmissionSchema, editSubmissionSchema } from "../validators/submission";
 import { createCommentSchema, flagSchema } from "../validators/comment";
@@ -93,9 +93,11 @@ router.openapi(createSubmissionRoute, async (c) => {
     }
   }
 
-  const { success: rlOk, reset } = await submissionRl(redis).limit(ip);
-  if (!rlOk) {
-    const retryAfter = Math.ceil((reset - Date.now()) / 1000);
+  const rlResult = isApiKey
+    ? await agentRl(redis).limit(apiKeyId!)
+    : await submissionRl(redis).limit(ip);
+  if (!rlResult.success) {
+    const retryAfter = Math.ceil((rlResult.reset - Date.now()) / 1000);
     const { error, status } = apiError("RATE_LIMITED", "Too many submissions. Try again later.", { retryAfter });
     return c.json({ error }, status as 429);
   }
@@ -122,9 +124,11 @@ router.openapi(createSubmissionRoute, async (c) => {
     data.type,
     data.title.toLowerCase().trim(),
     "code_before" in data ? (data.code_before ?? "") : "",
-    "code_after" in data ? data.code_after : "",
+    "code_after" in data ? (data.code_after ?? "") : "",
     "cpu" in data ? (data.cpu ?? "") : "",
-    "language" in data ? (data.language ?? "") : ""
+    "language" in data ? (data.language ?? "") : "",
+    "fix_for" in data ? data.fix_for : "",
+    data.type === "benchmark" ? String(data.value) : ""
   );
 
   const dupCheck = await db
@@ -138,6 +142,46 @@ router.openapi(createSubmissionRoute, async (c) => {
       existingSlug: dupCheck[0].slug,
     });
     return c.json({ error }, status as 409);
+  }
+
+  // Fuzzy duplicate detection via pg_trgm — degrades gracefully if extension not installed
+  try {
+    const titleNorm = data.title.toLowerCase().trim();
+    const simResult = await db.execute(
+      sql`SELECT slug, delta, similarity(lower(title), ${titleNorm}) AS sim
+          FROM submissions
+          WHERE status = 'approved'
+            AND type = ${data.type}
+            AND similarity(lower(title), ${titleNorm}) > 0.85
+          ORDER BY sim DESC
+          LIMIT 3`
+    );
+
+    if (simResult.rows.length > 0) {
+      const { error, status } = apiError("SIMILAR_FOUND", "Similar submissions already exist.", {
+        similarSubmissions: (simResult.rows as Array<{ slug: string; delta: number | null; sim: number }>).map((r) => ({
+          slug: r.slug,
+          delta: Number(r.delta ?? 0),
+          similarity: Number(r.sim),
+        })),
+      });
+      return c.json({ error }, status as 409);
+    }
+  } catch {
+    // pg_trgm extension not installed — skip similarity check
+  }
+
+  const fixForSlug = data.type === "fix" ? data.fix_for : null;
+  if (fixForSlug) {
+    const fixForCheck = await db
+      .select({ slug: submissions.slug })
+      .from(submissions)
+      .where(and(eq(submissions.slug, fixForSlug), eq(submissions.status, "approved")))
+      .limit(1);
+    if (fixForCheck.length === 0) {
+      const { error, status } = apiError("NOT_FOUND", "The submission to fix does not exist or is not approved.");
+      return c.json({ error }, status as 404);
+    }
   }
 
   const [approvedRow] = await db
@@ -191,9 +235,9 @@ router.openapi(createSubmissionRoute, async (c) => {
         title: data.title,
         body: data.body ?? null,
         codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
-        codeAfter: "code_after" in data ? data.code_after : null,
+        codeAfter: "code_after" in data ? (data.code_after ?? null) : null,
         before: "before" in data ? data.before : null,
-        after: "after" in data ? data.after : null,
+        after: data.type === "benchmark" ? data.value : "after" in data ? data.after : null,
         delta,
         metric: "metric" in data ? data.metric : null,
         cpu: "cpu" in data ? data.cpu : null,
@@ -202,6 +246,8 @@ router.openapi(createSubmissionRoute, async (c) => {
         tags: data.tags,
         sourceUrl: data.source_url ?? null,
         supersedes: supersededSlug,
+        fixFor: fixForSlug,
+        confidence: data.confidence ?? null,
         contentHash: hash,
         status: newStatus,
         version,
@@ -334,9 +380,21 @@ router.openapi(editRoute, async (c) => {
         ...(data.code_before !== undefined && { codeBefore: data.code_before }),
         ...(data.code_after !== undefined && { codeAfter: data.code_after }),
       }
-    : {
+    : data.type === "snippet"
+    ? {
         ...(data.code_after !== undefined && { codeAfter: data.code_after }),
-      };
+      }
+    : data.type === "fix"
+    ? {
+        ...(data.code_before !== undefined && { codeBefore: data.code_before }),
+        ...(data.code_after !== undefined && { codeAfter: data.code_after }),
+      }
+    : data.type === "benchmark"
+    ? {
+        ...(data.value !== undefined && { after: data.value }),
+        ...(data.cpu !== undefined && { cpu: data.cpu }),
+      }
+    : {};
 
   await db
     .update(submissions)
@@ -344,11 +402,31 @@ router.openapi(editRoute, async (c) => {
       ...(data.title !== undefined && { title: data.title }),
       ...(data.body !== undefined && { body: data.body }),
       ...(data.tags !== undefined && { tags: data.tags }),
+      ...(data.confidence !== undefined && { confidence: data.confidence }),
       ...typeSpecificSet,
       contentHash: nextHash,
       updatedAt: new Date(),
     })
     .where(eq(submissions.slug, slug));
+
+  await db.insert(editHistory).values({
+    id: crypto.randomUUID(),
+    submissionId: sub.id,
+    userId: user.id,
+    snapshot: {
+      title: sub.title,
+      body: sub.body,
+      tags: sub.tags,
+      codeBefore: sub.codeBefore,
+      codeAfter: sub.codeAfter,
+      before: sub.before,
+      after: sub.after,
+      metric: sub.metric,
+      cpu: sub.cpu,
+      delta: sub.delta,
+      confidence: sub.confidence,
+    },
+  });
 
   return c.json({ slug, version: sub.version }, 200);
 });

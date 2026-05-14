@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
 import { submissions } from "../db/schema";
-import { parsePagination, paginatedResponse } from "../lib/pagination";
+import { parsePagination, paginatedResponse, setPaginationHeaders } from "../lib/pagination";
 import { apiError } from "../lib/errors";
 import { formatSubmission } from "../lib/formatters";
 import { fetchSubmissions, fetchOneBySlug, buildOrderBy } from "../lib/queries";
@@ -65,6 +65,7 @@ router.openapi(tagSearchRoute, async (c) => {
   );
 
   const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
+  setPaginationHeaders(c, total);
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 

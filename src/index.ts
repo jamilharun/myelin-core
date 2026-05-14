@@ -8,6 +8,8 @@ import submissionsRoutes from "./routes/submissions";
 import submissionsWriteRoutes from "./routes/submissions-write";
 import searchRoutes from "./routes/search";
 import usersRoutes from "./routes/users";
+import notificationsRoutes from "./routes/notifications";
+import webhooksRoutes from "./routes/webhooks";
 
 const app = new OpenAPIHono<AppEnv>();
 
@@ -17,6 +19,7 @@ app.use("*", cors({
   origin: "*",
   allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   allowHeaders: ["Authorization", "Content-Type"],
+  exposeHeaders: ["X-Total-Count"],
   maxAge: 86400,
 }));
 
@@ -53,6 +56,8 @@ app.route("/api/v1", submissionsRoutes);
 app.route("/api/v1", submissionsWriteRoutes);
 app.route("/api/v1", searchRoutes);
 app.route("/api/v1", usersRoutes);
+app.route("/api/v1", notificationsRoutes);
+app.route("/api/v1", webhooksRoutes);
 
 // ─── OpenAPI spec + docs ──────────────────────────────────────────────────────
 
