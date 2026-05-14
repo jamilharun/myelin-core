@@ -62,9 +62,10 @@ router.openapi(feedRoute, async (c) => {
   const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
 
   setPaginationHeaders(c, total);
-  const data = format === "agent" ? rows.map(formatAgentSubmission) : rows.map(formatSubmission);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return c.json(paginatedResponse(data, total, pagination) as any, 200);
+  if (format === "agent") {
+    return c.json(paginatedResponse(rows.map(formatAgentSubmission), total, pagination), 200);
+  }
+  return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
 // ─── Filtered list ────────────────────────────────────────────────────────────
