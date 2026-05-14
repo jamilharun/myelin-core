@@ -7,6 +7,8 @@ import {
   boolean,
   timestamp,
   doublePrecision,
+  jsonb,
+  index,
   unique,
   check,
 } from "drizzle-orm/pg-core";
@@ -17,6 +19,25 @@ export const submissionTypeEnum = pgEnum("submission_type", [
   "optimization",
   "gotcha",
   "snippet",
+  "fix",
+  "benchmark",
+  "compiler_note",
+  "compatibility",
+]);
+
+export const confidenceEnum = pgEnum("confidence", [
+  "measured",
+  "documented",
+  "observed",
+  "theoretical",
+]);
+
+export const notificationTypeEnum = pgEnum("notification_type", [
+  "comment",
+  "upvote",
+  "flag_received",
+  "approved",
+  "rejected",
 ]);
 
 export const submissionStatusEnum = pgEnum("submission_status", [
@@ -127,6 +148,9 @@ export const submissions = pgTable("submissions", {
   // self-referential FK requires callback to avoid circular reference
   supersedes: text("supersedes").references((): AnyPgColumn => submissions.slug),
   supersededBy: text("superseded_by"),
+  // fix type only — points to the submission this corrects
+  fixFor: text("fix_for").references((): AnyPgColumn => submissions.slug),
+  confidence: confidenceEnum("confidence"),
   contentHash: text("content_hash").notNull(),
   status: submissionStatusEnum("status").notNull().default("pending"),
   version: integer("version").notNull().default(1),
@@ -137,7 +161,12 @@ export const submissions = pgTable("submissions", {
   apiKeyId: text("api_key_id").references(() => apiKeys.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  check(
+    "ck_fix_for_consistency",
+    sql`(${table.type} = 'fix' AND ${table.fixFor} IS NOT NULL) OR (${table.type} <> 'fix' AND ${table.fixFor} IS NULL)`
+  ),
+]);
 
 export const comments = pgTable("comments", {
   id: text("id").primaryKey(),
@@ -168,3 +197,50 @@ export const votes = pgTable(
   },
   (table) => [unique("uq_user_submission_vote").on(table.userId, table.submissionId)]
 );
+
+// Snapshot of changed fields stored before each PATCH — newest first via createdAt desc
+export const editHistory = pgTable("edit_history", {
+  id: text("id").primaryKey(),
+  submissionId: text("submission_id")
+    .notNull()
+    .references(() => submissions.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id),
+  // JSON snapshot of the fields as they were before this edit
+  snapshot: jsonb("snapshot").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("idx_edit_history_submission_created").on(table.submissionId, table.createdAt),
+  index("idx_edit_history_user_created").on(table.userId, table.createdAt),
+]);
+
+export const webhooks = pgTable("webhooks", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  // AES-256-GCM ciphertext of the HMAC signing secret — encrypt/decrypt via lib/webhook-crypto.ts
+  secret: text("secret").notNull(),
+  // e.g. ["submission.approved", "submission.flagged", "comment.created"]
+  events: text("events").array().notNull().default(sql`ARRAY[]::text[]`),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("idx_webhooks_user_active").on(table.userId, table.active),
+]);
+
+export const notifications = pgTable("notifications", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  type: notificationTypeEnum("type").notNull(),
+  // Flexible payload: { submissionSlug, actorUsername, commentId, ... }
+  payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  index("idx_notifications_user_read_created").on(table.userId, table.readAt, table.createdAt),
+]);

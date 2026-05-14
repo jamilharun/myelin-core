@@ -29,6 +29,8 @@ export const submissionCols = {
   sourceUrl: submissions.sourceUrl,
   supersedes: submissions.supersedes,
   supersededBy: submissions.supersededBy,
+  fixFor: submissions.fixFor,
+  confidence: submissions.confidence,
   status: submissions.status,
   version: submissions.version,
   isCanonical: submissions.isCanonical,

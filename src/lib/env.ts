@@ -5,4 +5,6 @@ export interface Env {
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
   SESSION_SECRET: string;
+  // 32-byte random key, base64-encoded — used to AES-256-GCM encrypt webhook signing secrets
+  WEBHOOK_SIGNING_KEY: string;
 }
