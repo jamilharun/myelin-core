@@ -3,7 +3,17 @@
 // WEBHOOK_SIGNING_KEY env var must be a base64-encoded 32-byte random key.
 
 async function importKey(base64Key: string): Promise<CryptoKey> {
-  const raw = Uint8Array.from(atob(base64Key), (c) => c.charCodeAt(0));
+  let decoded: string;
+  try {
+    decoded = atob(base64Key.trim());
+  } catch {
+    throw new Error("WEBHOOK_SIGNING_KEY must be valid base64.");
+  }
+  if (decoded.length !== 32) {
+    throw new Error("WEBHOOK_SIGNING_KEY must decode to exactly 32 bytes.");
+  }
+  const raw = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) raw[i] = decoded.charCodeAt(i);
   return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
@@ -20,8 +30,9 @@ export async function encryptWebhookSecret(plaintext: string, base64Key: string)
 }
 
 export async function decryptWebhookSecret(stored: string, base64Key: string): Promise<string> {
-  const [ivB64, ctB64] = stored.split(":");
-  if (!ivB64 || !ctB64) throw new Error("Invalid stored secret format.");
+  const parts = stored.split(":");
+  if (parts.length !== 2) throw new Error("Invalid stored secret format.");
+  const [ivB64, ctB64] = parts;
 
   const key = await importKey(base64Key);
   const iv = Uint8Array.from(atob(ivB64), (c) => c.charCodeAt(0));
