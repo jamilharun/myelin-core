@@ -138,7 +138,7 @@ Always check `is_canonical` before using a fetched submission in agent workflows
 
 `src/lib/balloon.ts` — token bucket per user in Upstash Redis.
 
-- Capacity: 100pt. Submission: 20pt. Comment: 5pt. Refill: 10pt/hr.
+- Capacity: 500pt. Submission: 20pt. Comment: 5pt. Refill: 100pt/hr.
 - Pop triggers: burst (10 posts/10min), or 3 flags received in 1hr.
 - On pop: saves `popped: true` to Redis AND rejects all pending submissions in DB.
 - Recovery: admin-only (not implemented in V1 — handle via Redis directly).

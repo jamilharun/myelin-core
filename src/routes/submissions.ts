@@ -18,7 +18,6 @@ import {
   paginatedSubmissionSchema,
   paginatedAgentSubmissionSchema,
   paginatedCommentSchema,
-  submissionSchema,
   submissionWithHistorySchema,
   errorSchema,
 } from "../lib/openapi-schemas";

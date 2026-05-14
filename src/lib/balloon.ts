@@ -3,6 +3,10 @@ import { submissions } from "../db/schema";
 import type { Db } from "../db/client";
 import type { AppRedis } from "./redis";
 
+// Tuned for active seeders: 500pt cap + 100pt/hr refill lets a contributor
+// sustain ~5 submissions/hr indefinitely without hitting the floor.
+// Burst detection (10 posts/10min) and flag accumulation (3/hr) are the real
+// spam gates — the balloon just rate-smooths good-faith volume.
 const CAPACITY = 500;
 const SUBMISSION_COST = 20;
 const COMMENT_COST = 5;
