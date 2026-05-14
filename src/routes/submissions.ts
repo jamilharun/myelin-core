@@ -487,6 +487,7 @@ router.openapi(historyRoute, async (c) => {
       .where(eq(editHistory.submissionId, sub[0].id)),
   ]);
 
+  setPaginationHeaders(c, total);
   return c.json(
     paginatedResponse(
       rows.map((r) => ({ id: r.id, snapshot: r.snapshot as Record<string, unknown>, edited_at: r.createdAt })),
