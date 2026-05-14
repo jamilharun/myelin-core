@@ -151,6 +151,10 @@ export const submissions = pgTable("submissions", {
   // fix type only — points to the submission this corrects
   fixFor: text("fix_for").references((): AnyPgColumn => submissions.slug),
   confidence: confidenceEnum("confidence"),
+  // gotcha type only — structured fields for agent consumption
+  rootCause: text("root_cause"),
+  affectedCpus: text("affected_cpus").array(),
+  detection: text("detection"),
   contentHash: text("content_hash").notNull(),
   status: submissionStatusEnum("status").notNull().default("pending"),
   version: integer("version").notNull().default(1),

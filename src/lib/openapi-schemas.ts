@@ -48,6 +48,9 @@ export const submissionSchema = z.object({
   superseded_by: z.string().nullable(),
   fix_for: z.string().nullable(),
   confidence: z.enum(["measured", "documented", "observed", "theoretical"]).nullable(),
+  root_cause: z.string().nullable(),
+  affected_cpus: z.array(z.string()).nullable(),
+  detection: z.string().nullable(),
   canonical_slug: z.string(),
   version: z.number().int(),
   is_canonical: z.boolean(),
@@ -55,6 +58,38 @@ export const submissionSchema = z.object({
   comment_count: z.number().int(),
   created_at: z.date(),
   updated_at: z.date(),
+});
+
+// Compact format for agent consumers — omits prose and code fields (~60-70% smaller)
+export const agentSubmissionSchema = z.object({
+  slug: z.string(),
+  type: z.enum(["optimization", "gotcha", "snippet", "fix", "benchmark", "compiler_note", "compatibility"]),
+  title: z.string(),
+  status: z.enum(["pending", "approved", "flagged", "rejected"]),
+  author: z.object({ username: z.string(), reputation: z.number().int() }),
+  cpu: z.string().nullable(),
+  metric: z.enum(["cycles", "instructions", "ns", "ms", "rss", "throughput"]).nullable(),
+  delta: z.number().nullable(),
+  confidence: z.enum(["measured", "documented", "observed", "theoretical"]).nullable(),
+  tags: z.array(z.string()),
+  root_cause: z.string().nullable(),
+  affected_cpus: z.array(z.string()).nullable(),
+  detection: z.string().nullable(),
+  canonical_slug: z.string(),
+  version: z.number().int(),
+  is_canonical: z.boolean(),
+  upvotes: z.number().int(),
+  comment_count: z.number().int(),
+  created_at: z.date(),
+  updated_at: z.date(),
+});
+
+export const paginatedAgentSubmissionSchema = z.object({
+  data: z.array(agentSubmissionSchema),
+  page: z.number().int(),
+  limit: z.number().int(),
+  total_pages: z.number().int(),
+  total: z.number().int(),
 });
 
 export const submissionWithHistorySchema = submissionSchema.extend({

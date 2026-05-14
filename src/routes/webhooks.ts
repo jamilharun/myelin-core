@@ -4,7 +4,6 @@ import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
 import { webhooks } from "../db/schema";
 import { authenticate } from "../auth/middleware";
-import { apiError } from "../lib/errors";
 import { encryptWebhookSecret } from "../lib/webhook-crypto";
 import { parsePagination, paginatedResponse, setPaginationHeaders } from "../lib/pagination";
 import { errorSchema, paginationQuerySchema, validationHook } from "../lib/openapi-schemas";

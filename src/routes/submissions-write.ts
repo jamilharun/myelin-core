@@ -2,6 +2,7 @@ import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { and, eq, sql } from "drizzle-orm";
 import type { AppEnv } from "../types";
 import { createDb } from "../db/client";
+import type { Db } from "../db/client";
 import { createRedis } from "../lib/redis";
 import { submissions, users, comments, votes, editHistory } from "../db/schema";
 import { apiError } from "../lib/errors";
@@ -14,6 +15,7 @@ import { checkAndDeduct, popBalloon, trackFlagReceived } from "../lib/balloon";
 import { submissionRl, newAccountRl, burstRl, commentRl, agentRl } from "../lib/rate-limit";
 import { authenticate } from "../auth/middleware"; // used by router.use("*", authenticate)
 import { createSubmissionSchema, editSubmissionSchema } from "../validators/submission";
+import type { CreateSubmissionInput } from "../validators/submission";
 import { createCommentSchema, flagSchema } from "../validators/comment";
 import { errorSchema, submissionSchema, validationHook } from "../lib/openapi-schemas";
 
@@ -24,6 +26,164 @@ router.use("/submissions/*", authenticate);
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+// ─── Core insert helper ───────────────────────────────────────────────────────
+//
+// Encapsulates the per-submission pipeline steps that are identical between the
+// single POST and the batch endpoint: delta → hash → dedup → similarity →
+// fix_for → status → supersedes → slug+insert → chain update.
+//
+// Balloon deduction and per-request rate limits are handled by callers.
+
+type InsertResult =
+  | { ok: true; slug: string; supersedes: string | null; wasApproved: boolean }
+  | { ok: false; code: "DUPLICATE"; existingSlug: string }
+  | { ok: false; code: "SIMILAR_FOUND"; similarSubmissions: Array<{ slug: string; delta: number; similarity: number }> }
+  | { ok: false; code: "NOT_FOUND"; message: string }
+  | { ok: false; code: "INTERNAL_ERROR"; message: string };
+
+async function insertSubmission(
+  data: CreateSubmissionInput,
+  ctx: { db: Db; userId: string; isApiKey: boolean; apiKeyId: string | null; approvedCount: number }
+): Promise<InsertResult> {
+  const { db, userId, isApiKey, apiKeyId, approvedCount } = ctx;
+
+  const delta = data.type === "optimization" ? calculateDelta(data.before, data.after) : null;
+
+  const hash = await contentHash(
+    data.type,
+    data.title.toLowerCase().trim(),
+    "code_before" in data ? (data.code_before ?? "") : "",
+    "code_after" in data ? (data.code_after ?? "") : "",
+    "cpu" in data ? (data.cpu ?? "") : "",
+    "language" in data ? (data.language ?? "") : "",
+    "fix_for" in data ? data.fix_for : "",
+    data.type === "benchmark" ? String(data.value) : ""
+  );
+
+  const dupCheck = await db
+    .select({ slug: submissions.slug })
+    .from(submissions)
+    .where(eq(submissions.contentHash, hash))
+    .limit(1);
+  if (dupCheck.length > 0) return { ok: false, code: "DUPLICATE", existingSlug: dupCheck[0].slug };
+
+  // Fuzzy duplicate detection — degrades gracefully if pg_trgm is not installed
+  try {
+    const titleNorm = data.title.toLowerCase().trim();
+    const simResult = await db.execute(
+      sql`SELECT slug, delta, similarity(lower(title), ${titleNorm}) AS sim
+          FROM submissions
+          WHERE status = 'approved'
+            AND type = ${data.type}
+            AND similarity(lower(title), ${titleNorm}) > 0.85
+          ORDER BY sim DESC
+          LIMIT 3`
+    );
+    if (simResult.rows.length > 0) {
+      return {
+        ok: false,
+        code: "SIMILAR_FOUND",
+        similarSubmissions: (simResult.rows as Array<{ slug: string; delta: number | null; sim: number }>).map((r) => ({
+          slug: r.slug,
+          delta: Number(r.delta ?? 0),
+          similarity: Number(r.sim),
+        })),
+      };
+    }
+  } catch { /* pg_trgm not installed */ }
+
+  const fixForSlug = data.type === "fix" ? data.fix_for : null;
+  if (fixForSlug) {
+    const fixForCheck = await db
+      .select({ slug: submissions.slug })
+      .from(submissions)
+      .where(and(eq(submissions.slug, fixForSlug), eq(submissions.status, "approved")))
+      .limit(1);
+    if (fixForCheck.length === 0) {
+      return { ok: false, code: "NOT_FOUND", message: "The submission to fix does not exist or is not approved." };
+    }
+  }
+
+  const newStatus = isApiKey || approvedCount >= 3 ? "approved" : "pending";
+  const supersededSlug = "supersedes" in data ? (data.supersedes ?? null) : null;
+  let version = 1;
+  let chainCanonicalSlug: string | null = null;
+
+  if (supersededSlug) {
+    const prev = await db
+      .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
+      .from(submissions)
+      .where(eq(submissions.slug, supersededSlug))
+      .limit(1);
+    if (prev.length === 0) return { ok: false, code: "NOT_FOUND", message: "The submission to supersede does not exist." };
+
+    const [{ maxVersion }] = await db
+      .select({ maxVersion: sql<number>`CAST(MAX(${submissions.version}) AS INT)` })
+      .from(submissions)
+      .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
+
+    version = (maxVersion ?? prev[0].version) + 1;
+    chainCanonicalSlug = prev[0].canonicalSlug;
+  }
+
+  let slug = "";
+  for (let attempt = 0; attempt < 5; attempt++) {
+    slug = attempt === 0
+      ? await generateUniqueSlug(data.title, db)
+      : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
+
+    const id = crypto.randomUUID();
+    try {
+      await db.insert(submissions).values({
+        id,
+        slug,
+        canonicalSlug: slug,
+        type: data.type,
+        title: data.title,
+        body: data.body ?? null,
+        codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
+        codeAfter: "code_after" in data ? (data.code_after ?? null) : null,
+        before: "before" in data ? data.before : null,
+        after: data.type === "benchmark" ? data.value : "after" in data ? data.after : null,
+        delta,
+        metric: "metric" in data ? data.metric : null,
+        cpu: "cpu" in data ? data.cpu : null,
+        simd: "simd" in data ? (data.simd ?? null) : null,
+        language: "language" in data ? data.language : null,
+        tags: data.tags,
+        sourceUrl: data.source_url ?? null,
+        supersedes: supersededSlug,
+        fixFor: fixForSlug,
+        confidence: data.confidence ?? null,
+        rootCause: data.type === "gotcha" ? (data.root_cause ?? null) : null,
+        affectedCpus: data.type === "gotcha" ? (data.affected_cpus ?? null) : null,
+        detection: data.type === "gotcha" ? (data.detection ?? null) : null,
+        contentHash: hash,
+        status: newStatus,
+        version,
+        isCanonical: true,
+        userId,
+        apiKeyId,
+      });
+
+      // Chain update: if these fail, a cleanup pass is needed — the new submission is valid either way.
+      if (supersededSlug && chainCanonicalSlug) {
+        try {
+          await db.update(submissions).set({ supersededBy: slug }).where(eq(submissions.slug, supersededSlug));
+          await db.update(submissions).set({ canonicalSlug: slug, isCanonical: false }).where(eq(submissions.canonicalSlug, chainCanonicalSlug));
+        } catch { /* non-fatal */ }
+      }
+
+      return { ok: true, slug, supersedes: supersededSlug, wasApproved: newStatus === "approved" };
+    } catch (e) {
+      if (attempt < 4 && isSlugConflict(e)) continue;
+      return { ok: false, code: "INTERNAL_ERROR", message: "Failed to insert submission." };
+    }
+  }
+
+  return { ok: false, code: "INTERNAL_ERROR", message: "Failed to generate a unique slug after 5 attempts." };
+}
 
 // ─── POST /submissions ────────────────────────────────────────────────────────
 
@@ -117,167 +277,37 @@ router.openapi(createSubmissionRoute, async (c) => {
 
   const data = c.req.valid("json");
 
-  const delta =
-    data.type === "optimization" ? calculateDelta(data.before, data.after) : null;
-
-  const hash = await contentHash(
-    data.type,
-    data.title.toLowerCase().trim(),
-    "code_before" in data ? (data.code_before ?? "") : "",
-    "code_after" in data ? (data.code_after ?? "") : "",
-    "cpu" in data ? (data.cpu ?? "") : "",
-    "language" in data ? (data.language ?? "") : "",
-    "fix_for" in data ? data.fix_for : "",
-    data.type === "benchmark" ? String(data.value) : ""
-  );
-
-  const dupCheck = await db
-    .select({ slug: submissions.slug })
-    .from(submissions)
-    .where(eq(submissions.contentHash, hash))
-    .limit(1);
-
-  if (dupCheck.length > 0) {
-    const { error, status } = apiError("DUPLICATE", "Exact duplicate already exists.", {
-      existingSlug: dupCheck[0].slug,
-    });
-    return c.json({ error }, status as 409);
-  }
-
-  // Fuzzy duplicate detection via pg_trgm — degrades gracefully if extension not installed
-  try {
-    const titleNorm = data.title.toLowerCase().trim();
-    const simResult = await db.execute(
-      sql`SELECT slug, delta, similarity(lower(title), ${titleNorm}) AS sim
-          FROM submissions
-          WHERE status = 'approved'
-            AND type = ${data.type}
-            AND similarity(lower(title), ${titleNorm}) > 0.85
-          ORDER BY sim DESC
-          LIMIT 3`
-    );
-
-    if (simResult.rows.length > 0) {
-      const { error, status } = apiError("SIMILAR_FOUND", "Similar submissions already exist.", {
-        similarSubmissions: (simResult.rows as Array<{ slug: string; delta: number | null; sim: number }>).map((r) => ({
-          slug: r.slug,
-          delta: Number(r.delta ?? 0),
-          similarity: Number(r.sim),
-        })),
-      });
-      return c.json({ error }, status as 409);
-    }
-  } catch {
-    // pg_trgm extension not installed — skip similarity check
-  }
-
-  const fixForSlug = data.type === "fix" ? data.fix_for : null;
-  if (fixForSlug) {
-    const fixForCheck = await db
-      .select({ slug: submissions.slug })
-      .from(submissions)
-      .where(and(eq(submissions.slug, fixForSlug), eq(submissions.status, "approved")))
-      .limit(1);
-    if (fixForCheck.length === 0) {
-      const { error, status } = apiError("NOT_FOUND", "The submission to fix does not exist or is not approved.");
-      return c.json({ error }, status as 404);
-    }
-  }
-
   const [approvedRow] = await db
     .select({ count: sql<number>`CAST(COUNT(*) AS INT)` })
     .from(submissions)
     .where(and(eq(submissions.userId, user.id), eq(submissions.status, "approved")));
 
-  const newStatus = isApiKey || Number(approvedRow?.count ?? 0) >= 3 ? "approved" : "pending";
+  const result = await insertSubmission(data, {
+    db,
+    userId: user.id,
+    isApiKey,
+    apiKeyId: apiKeyId ?? null,
+    approvedCount: Number(approvedRow?.count ?? 0),
+  });
 
-  const supersededSlug = "supersedes" in data ? (data.supersedes ?? null) : null;
-
-  // Resolve supersedes chain before slug generation so we can fail fast.
-  let version = 1;
-  let chainCanonicalSlug: string | null = null;
-
-  if (supersededSlug) {
-    const prev = await db
-      .select({ version: submissions.version, canonicalSlug: submissions.canonicalSlug })
-      .from(submissions)
-      .where(eq(submissions.slug, supersededSlug))
-      .limit(1);
-
-    if (prev.length === 0) {
-      const { error, status } = apiError("NOT_FOUND", "The submission to supersede does not exist.");
+  if (!result.ok) {
+    if (result.code === "DUPLICATE") {
+      const { error, status } = apiError("DUPLICATE", "Exact duplicate already exists.", { existingSlug: result.existingSlug });
+      return c.json({ error }, status as 409);
+    }
+    if (result.code === "SIMILAR_FOUND") {
+      const { error, status } = apiError("SIMILAR_FOUND", "Similar submissions already exist.", { similarSubmissions: result.similarSubmissions });
+      return c.json({ error }, status as 409);
+    }
+    if (result.code === "NOT_FOUND") {
+      const { error, status } = apiError("NOT_FOUND", result.message);
       return c.json({ error }, status as 404);
     }
-
-    const [{ maxVersion }] = await db
-      .select({ maxVersion: sql<number>`CAST(MAX(${submissions.version}) AS INT)` })
-      .from(submissions)
-      .where(eq(submissions.canonicalSlug, prev[0].canonicalSlug));
-
-    version = (maxVersion ?? prev[0].version) + 1;
-    chainCanonicalSlug = prev[0].canonicalSlug;
-  }
-
-  let slug = "";
-  for (let attempt = 0; attempt < 5; attempt++) {
-    slug = attempt === 0
-      ? await generateUniqueSlug(data.title, db)
-      : `${titleToSlug(data.title) || "submission"}-${crypto.randomUUID().slice(0, 8)}`;
-
-    const id = crypto.randomUUID();
-
-    try {
-      await db.insert(submissions).values({
-        id,
-        slug,
-        canonicalSlug: slug,
-        type: data.type,
-        title: data.title,
-        body: data.body ?? null,
-        codeBefore: "code_before" in data ? (data.code_before ?? null) : null,
-        codeAfter: "code_after" in data ? (data.code_after ?? null) : null,
-        before: "before" in data ? data.before : null,
-        after: data.type === "benchmark" ? data.value : "after" in data ? data.after : null,
-        delta,
-        metric: "metric" in data ? data.metric : null,
-        cpu: "cpu" in data ? data.cpu : null,
-        simd: "simd" in data ? (data.simd ?? null) : null,
-        language: "language" in data ? data.language : null,
-        tags: data.tags,
-        sourceUrl: data.source_url ?? null,
-        supersedes: supersededSlug,
-        fixFor: fixForSlug,
-        confidence: data.confidence ?? null,
-        contentHash: hash,
-        status: newStatus,
-        version,
-        isCanonical: true,
-        userId: user.id,
-        apiKeyId: apiKeyId ?? null,
-      });
-      break;
-    } catch (e) {
-      if (attempt < 4 && isSlugConflict(e)) continue;
-      throw e;
-    }
-  }
-
-  // Update old chain after insert succeeds. If these fail, the chain pointers
-  // need a cleanup pass — the new submission itself is always valid.
-  if (supersededSlug && chainCanonicalSlug) {
-    await db
-      .update(submissions)
-      .set({ supersededBy: slug })
-      .where(eq(submissions.slug, supersededSlug));
-
-    await db
-      .update(submissions)
-      .set({ canonicalSlug: slug, isCanonical: false })
-      .where(eq(submissions.canonicalSlug, chainCanonicalSlug));
+    throw new Error(result.message);
   }
 
   return c.json(
-    { status: "created" as const, slug, is_canonical: true, supersedes: supersededSlug, url: `/s/${slug}` },
+    { status: "created" as const, slug: result.slug, is_canonical: true, supersedes: result.supersedes, url: `/s/${result.slug}` },
     201
   );
 });
@@ -379,6 +409,9 @@ router.openapi(editRoute, async (c) => {
         ...(data.cpu !== undefined && { cpu: data.cpu }),
         ...(data.code_before !== undefined && { codeBefore: data.code_before }),
         ...(data.code_after !== undefined && { codeAfter: data.code_after }),
+        ...(data.root_cause !== undefined && { rootCause: data.root_cause }),
+        ...(data.affected_cpus !== undefined && { affectedCpus: data.affected_cpus }),
+        ...(data.detection !== undefined && { detection: data.detection }),
       }
     : data.type === "snippet"
     ? {
@@ -425,10 +458,171 @@ router.openapi(editRoute, async (c) => {
       cpu: sub.cpu,
       delta: sub.delta,
       confidence: sub.confidence,
+      rootCause: sub.rootCause,
+      affectedCpus: sub.affectedCpus,
+      detection: sub.detection,
     },
   });
 
   return c.json({ slug, version: sub.version }, 200);
+});
+
+// ─── POST /submissions/batch ──────────────────────────────────────────────────
+
+const batchResultItemSchema = z.object({
+  index: z.number().int(),
+  status: z.enum(["created", "duplicate", "similar", "balloon_exhausted", "error"]),
+  slug: z.string().optional(),
+  url: z.string().optional(),
+  existing_slug: z.string().optional(),
+  similar_submissions: z.array(z.object({
+    slug: z.string(),
+    delta: z.number(),
+    similarity: z.number(),
+  })).optional(),
+  code: z.string().optional(),
+  message: z.string().optional(),
+});
+
+const batchRoute = createRoute({
+  method: "post",
+  path: "/submissions/batch",
+  tags: ["Submissions"],
+  summary: "Submit multiple submissions in one request — rate limit charged once per batch",
+  description:
+    "Each item is processed independently. Some may succeed while others fail. " +
+    "The `fix_for` field must reference an already-approved submission (not another item in the same batch). " +
+    "The `supersedes` field is supported per item. Max 20 items per batch.",
+  security: [{ bearerAuth: [] }],
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            submissions: z.array(createSubmissionSchema).min(1).max(20),
+          }),
+        },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            results: z.array(batchResultItemSchema),
+            created: z.number().int(),
+            failed: z.number().int(),
+          }),
+        },
+      },
+      description: "Per-item results — check each item's status field",
+    },
+    400: { content: { "application/json": { schema: errorSchema } }, description: "Validation error" },
+    401: { content: { "application/json": { schema: errorSchema } }, description: "Not authenticated" },
+    403: { content: { "application/json": { schema: errorSchema } }, description: "Forbidden" },
+    429: { content: { "application/json": { schema: errorSchema } }, description: "Rate limited or balloon popped" },
+  },
+});
+
+router.use("/submissions/batch", authenticate);
+router.openapi(batchRoute, async (c) => {
+  const user = c.get("user");
+  const isApiKey = c.get("isApiKey");
+  const apiKeyId = c.get("apiKeyId");
+  const ip = c.req.header("CF-Connecting-IP") ?? c.req.header("X-Forwarded-For") ?? "unknown";
+  const redis = createRedis(c.env);
+  const db = createDb(c.env.DATABASE_URL);
+
+  // ── Per-batch checks ─────────────────────────────────────────────────────────
+
+  if (user.reputation < 0) {
+    const { error, status } = apiError("FORBIDDEN", "Account suspended.");
+    return c.json({ error }, status as 403);
+  }
+
+  if (!isApiKey) {
+    const ageMs = Date.now() - user.createdAt.getTime();
+    if (ageMs < 24 * 60 * 60 * 1000) {
+      const { error, status } = apiError("FORBIDDEN", "New accounts must wait 24 hours before posting.");
+      return c.json({ error }, status as 403);
+    }
+
+    if (ageMs < SEVEN_DAYS_MS) {
+      const { success } = await newAccountRl(redis).limit(user.id);
+      if (!success) {
+        const { error, status } = apiError("RATE_LIMITED", "New accounts can post once per day for the first 7 days.");
+        return c.json({ error }, status as 429);
+      }
+    }
+  }
+
+  const rlResult = isApiKey
+    ? await agentRl(redis).limit(apiKeyId!)
+    : await submissionRl(redis).limit(ip);
+  if (!rlResult.success) {
+    const retryAfter = Math.ceil((rlResult.reset - Date.now()) / 1000);
+    const { error, status } = apiError("RATE_LIMITED", "Too many submissions. Try again later.", { retryAfter });
+    return c.json({ error }, status as 429);
+  }
+
+  const { success: burstOk } = await burstRl(redis).limit(user.id);
+  if (!burstOk) {
+    await popBalloon(redis, user.id, db);
+    const { error, status } = apiError("BALLOON_POPPED", "Posting suspended due to burst activity. Contact support.");
+    return c.json({ error }, status as 429);
+  }
+
+  const { submissions: items } = c.req.valid("json");
+
+  // Fetch approved count once — track increments across the batch for queue placement
+  const [approvedRow] = await db
+    .select({ count: sql<number>`CAST(COUNT(*) AS INT)` })
+    .from(submissions)
+    .where(and(eq(submissions.userId, user.id), eq(submissions.status, "approved")));
+  let approvedCount = Number(approvedRow?.count ?? 0);
+
+  // ── Per-submission loop ──────────────────────────────────────────────────────
+
+  const results: z.infer<typeof batchResultItemSchema>[] = [];
+  let created = 0;
+  let failed = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const balloon = await checkAndDeduct(redis, user.id, "submission");
+    if (!balloon.allowed) {
+      results.push({ index: i, status: "balloon_exhausted" });
+      failed++;
+      continue;
+    }
+
+    const result = await insertSubmission(items[i], {
+      db,
+      userId: user.id,
+      isApiKey,
+      apiKeyId: apiKeyId ?? null,
+      approvedCount,
+    });
+
+    if (!result.ok) {
+      if (result.code === "DUPLICATE") {
+        results.push({ index: i, status: "duplicate", existing_slug: result.existingSlug });
+      } else if (result.code === "SIMILAR_FOUND") {
+        results.push({ index: i, status: "similar", similar_submissions: result.similarSubmissions });
+      } else {
+        results.push({ index: i, status: "error", code: result.code, message: result.message });
+      }
+      failed++;
+      continue;
+    }
+
+    if (result.wasApproved) approvedCount++;
+    results.push({ index: i, status: "created", slug: result.slug, url: `/s/${result.slug}` });
+    created++;
+  }
+
+  return c.json({ results, created, failed }, 200);
 });
 
 // ─── POST /submissions/:slug/comments ─────────────────────────────────────────

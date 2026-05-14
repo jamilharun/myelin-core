@@ -5,7 +5,7 @@ import { createDb } from "../db/client";
 import { submissions, users, comments, editHistory } from "../db/schema";
 import { parsePagination, paginatedResponse, setPaginationHeaders } from "../lib/pagination";
 import { apiError } from "../lib/errors";
-import { formatSubmission } from "../lib/formatters";
+import { formatSubmission, formatAgentSubmission } from "../lib/formatters";
 import {
   fetchSubmissions,
   fetchOneBySlug,
@@ -16,6 +16,7 @@ import { authenticate } from "../auth/middleware";
 import {
   paginationQuerySchema,
   paginatedSubmissionSchema,
+  paginatedAgentSubmissionSchema,
   paginatedCommentSchema,
   submissionSchema,
   submissionWithHistorySchema,
@@ -35,23 +36,35 @@ const feedRoute = createRoute({
   path: "/feed",
   tags: ["Submissions"],
   summary: "Latest approved canonical submissions",
-  request: { query: paginationQuerySchema },
+  request: {
+    query: paginationQuerySchema.extend({
+      format: z.enum(["full", "agent"]).optional(),
+    }),
+  },
   responses: {
     200: {
-      content: { "application/json": { schema: paginatedSubmissionSchema } },
-      description: "Paginated feed",
+      content: {
+        "application/json": {
+          schema: z.union([paginatedSubmissionSchema, paginatedAgentSubmissionSchema]),
+        },
+      },
+      description: "Paginated feed. `?format=agent` returns compact records omitting prose and code fields (~60-70% smaller payload, includes gotcha-specific `root_cause`, `detection`, `affected_cpus`)",
     },
   },
 });
 
 router.openapi(feedRoute, async (c) => {
-  const pagination = parsePagination(c.req.valid("query"));
+  const { format, ...paginationQuery } = c.req.valid("query");
+  const pagination = parsePagination(paginationQuery);
   const db = createDb(c.env.DATABASE_URL);
 
   const where = and(eq(submissions.status, "approved"), eq(submissions.isCanonical, true));
   const { rows, total } = await fetchSubmissions(db, where, pagination, buildOrderBy());
 
   setPaginationHeaders(c, total);
+  if (format === "agent") {
+    return c.json(paginatedResponse(rows.map(formatAgentSubmission), total, pagination), 200);
+  }
   return c.json(paginatedResponse(rows.map(formatSubmission), total, pagination), 200);
 });
 
