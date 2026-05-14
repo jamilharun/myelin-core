@@ -52,6 +52,9 @@ const gotchaSchema = z.object({
   tags: z.array(z.string().max(30)).max(10).default([]),
   source_url: sourceUrl,
   confidence,
+  root_cause: z.string().trim().max(2000).optional(),
+  affected_cpus: z.array(z.string().trim().max(50)).max(20).optional(),
+  detection: z.string().trim().max(2000).optional(),
 });
 
 const snippetSchema = z.object({
@@ -154,6 +157,9 @@ export const editSubmissionSchema = z.discriminatedUnion("type", [
     cpu: z.string().trim().min(1).optional(),
     code_before: z.string().trim().max(MAX_CODE).optional(),
     code_after: z.string().trim().max(MAX_CODE).optional(),
+    root_cause: z.string().trim().max(2000).optional(),
+    affected_cpus: z.array(z.string().trim().max(50)).max(20).optional(),
+    detection: z.string().trim().max(2000).optional(),
   }),
   z.object({
     type: z.literal("snippet"),

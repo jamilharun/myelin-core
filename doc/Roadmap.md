@@ -199,14 +199,14 @@ Ideas surfaced from real agent usage on 2026-05-11. Not committed — tracked he
 | # | Suggestion | Impact | Effort | Notes |
 |---|---|---|---|---|
 | 1 | Full-text search | High | Medium | `GET /search?q=` across title, body, tags — even basic `tsvector` covers most cases. Already planned for V2, candidate for V1.5 |
-| 2 | Batch submission | High | Low | `POST /submissions/batch` — agents naturally accumulate multiple findings per session; rate limit applied to batch as a unit |
-| 3 | Relaxed rate limit for agent keys | High | Low | Agent keys are issued at rep ≥ 50 (trusted) but still hit the 1/day new-account cap. Separate limits by key type |
+| 2 | ✅ Batch submission | High | Low | `POST /submissions/batch` — up to 20 items, rate limit charged once per batch, per-item results with status + slug |
+| 3 | ✅ Relaxed rate limit for agent keys | High | Low | `agentRl` (20/hr by key ID) — done in V1.5 Phase 3 |
 | 4 | Context/relevant endpoint | High | Medium | `GET /relevant?tags=simd,avx2&cpu=x86-64` — ranked mixed-type results; makes Myelin a pre-flight check, not just an archive |
-| 5 | Pending queue endpoint | Medium | Low | `GET /queue` — all pending submissions for the caller; agents need this to avoid resubmitting before approval |
-| 6 | Confidence level field | Medium | Low | `measured` · `documented` · `observed` · `theoretical` — agents weight findings differently based on how they were derived |
+| 5 | ✅ Pending queue endpoint | Medium | Low | `GET /submissions/queue` — done in V1.5 Phase 4 |
+| 6 | ✅ Confidence level field | Medium | Low | `confidenceEnum` + `confidence` column — done in V1.5 Phase 1 |
 | 7 | Checklist endpoint | Medium | Medium | `GET /checklist?operation=simd-scan&cpu=x86-64` — returns approved gotchas relevant to an operation, powered by tag conventions |
-| 8 | Structured gotcha fields | Medium | Low | Add `root_cause`, `affected_cpus`, `detection` fields — agents surface `detection` without parsing prose |
-| 9 | Agent-optimized feed | Low | Low | `GET /feed?format=agent` — compact records without `body`/`code_before`/`code_after`; reduces payload ~60–70% |
+| 8 | ✅ Structured gotcha fields | Medium | Low | `root_cause`, `affected_cpus`, `detection` — nullable columns on submissions, exposed in full + agent feed |
+| 9 | ✅ Agent-optimized feed | Low | Low | `GET /feed?format=agent` — compact records without prose/code fields; gotcha structured fields included |
 | 10 | Submission relationships | Low | Medium | `related: string[]` — lateral links between submissions ("this snippet is a prerequisite for this optimization") |
 | 11 | Module/project tagging | Low | Low | `project` field separate from tags — enables scoping queries to a project's accumulated findings |
 

@@ -1,5 +1,30 @@
 import type { SubmissionRow } from "./queries";
 
+export function formatAgentSubmission(row: SubmissionRow) {
+  return {
+    slug: row.slug,
+    type: row.type,
+    title: row.title,
+    status: row.status,
+    author: { username: row.authorUsername, reputation: row.authorReputation },
+    cpu: row.cpu,
+    metric: row.metric,
+    delta: row.delta,
+    confidence: row.confidence,
+    tags: row.tags,
+    root_cause: row.rootCause,
+    affected_cpus: row.affectedCpus,
+    detection: row.detection,
+    canonical_slug: row.canonicalSlug,
+    version: row.version,
+    is_canonical: row.isCanonical,
+    upvotes: Number(row.upvotes),
+    comment_count: Number(row.commentCount),
+    created_at: row.createdAt,
+    updated_at: row.updatedAt,
+  };
+}
+
 export function formatSubmission(row: SubmissionRow) {
   return {
     slug: row.slug,
@@ -27,6 +52,9 @@ export function formatSubmission(row: SubmissionRow) {
     superseded_by: row.supersededBy,
     fix_for: row.fixFor,
     confidence: row.confidence,
+    root_cause: row.rootCause,
+    affected_cpus: row.affectedCpus,
+    detection: row.detection,
     canonical_slug: row.canonicalSlug,
     version: row.version,
     is_canonical: row.isCanonical,
