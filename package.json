@@ -5,10 +5,14 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:generate": "dotenv -e .dev.vars -- drizzle-kit generate",
+    "db:migrate": "dotenv -e .dev.vars -- drizzle-kit migrate",
+    "db:push": "dotenv -e .dev.vars -- drizzle-kit push",
+    "db:studio": "dotenv -e .dev.vars -- drizzle-kit studio",
+    "db:generate:prod": "dotenv -e .prod.vars -- drizzle-kit generate",
+    "db:migrate:prod": "dotenv -e .prod.vars -- drizzle-kit migrate",
+    "db:push:prod": "dotenv -e .prod.vars -- drizzle-kit push",
+    "db:studio:prod": "dotenv -e .prod.vars -- drizzle-kit studio"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.3.0",
@@ -22,6 +26,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "dotenv-cli": "^11.0.0",
     "drizzle-kit": "^0.31.10",
     "typescript": "^6.0.3",
     "wrangler": "^4.4.0"
