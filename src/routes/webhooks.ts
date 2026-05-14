@@ -75,20 +75,20 @@ router.openapi(createRoute_, async (c) => {
   const ciphertext = await encryptWebhookSecret(plainSecret, c.env.WEBHOOK_SIGNING_KEY);
 
   const id = crypto.randomUUID();
-  const [inserted] = await db.insert(webhooks).values({
+  await db.insert(webhooks).values({
     id,
     userId: user.id,
     url,
     secret: ciphertext,
     events: events as string[],
-  }).returning({ createdAt: webhooks.createdAt });
+  });
 
   return c.json({
     id,
     url,
     events,
     active: true,
-    created_at: inserted.createdAt,
+    created_at: new Date(),
     secret: plainSecret,
     note: "Save this secret — it will not be shown again. Use it to verify HMAC-SHA256 signatures on incoming webhook payloads.",
   }, 201);
