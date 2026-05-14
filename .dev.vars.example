@@ -4,3 +4,5 @@ UPSTASH_REDIS_REST_TOKEN=your_token_here
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
 SESSION_SECRET=a_random_32_char_string_minimum
+# generate with: openssl rand -base64 32
+WEBHOOK_SIGNING_KEY=base64_encoded_32_byte_random_key

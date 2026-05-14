@@ -8,6 +8,7 @@ import {
   timestamp,
   doublePrecision,
   jsonb,
+  index,
   unique,
   check,
 } from "drizzle-orm/pg-core";
@@ -160,7 +161,12 @@ export const submissions = pgTable("submissions", {
   apiKeyId: text("api_key_id").references(() => apiKeys.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (table) => [
+  check(
+    "ck_fix_for_consistency",
+    sql`(${table.type} = 'fix' AND ${table.fixFor} IS NOT NULL) OR (${table.type} <> 'fix' AND ${table.fixFor} IS NULL)`
+  ),
+]);
 
 export const comments = pgTable("comments", {
   id: text("id").primaryKey(),
@@ -204,7 +210,10 @@ export const editHistory = pgTable("edit_history", {
   // JSON snapshot of the fields as they were before this edit
   snapshot: jsonb("snapshot").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  index("idx_edit_history_submission_created").on(table.submissionId, table.createdAt),
+  index("idx_edit_history_user_created").on(table.userId, table.createdAt),
+]);
 
 export const webhooks = pgTable("webhooks", {
   id: text("id").primaryKey(),
@@ -212,13 +221,15 @@ export const webhooks = pgTable("webhooks", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   url: text("url").notNull(),
-  // HMAC-SHA256 signing secret — stored plaintext, shown once on creation
+  // AES-256-GCM ciphertext of the HMAC signing secret — encrypt/decrypt via lib/webhook-crypto.ts
   secret: text("secret").notNull(),
   // e.g. ["submission.approved", "submission.flagged", "comment.created"]
   events: text("events").array().notNull().default(sql`ARRAY[]::text[]`),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  index("idx_webhooks_user_active").on(table.userId, table.active),
+]);
 
 export const notifications = pgTable("notifications", {
   id: text("id").primaryKey(),
@@ -230,4 +241,6 @@ export const notifications = pgTable("notifications", {
   payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
   readAt: timestamp("read_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => [
+  index("idx_notifications_user_read_created").on(table.userId, table.readAt, table.createdAt),
+]);

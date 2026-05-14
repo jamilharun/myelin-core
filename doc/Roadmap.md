@@ -88,7 +88,7 @@ These are not features — they are the operational prerequisites for a real dep
 | Update `queries.ts` `submissionCols` | ✅ | `fixFor` + `confidence` added to shared select |
 | Update `formatters.ts` | ✅ | `fix_for` + `confidence` now read from DB row |
 | Run `pnpm db:push` on dev | 🔲 | Apply schema to Neon dev branch |
-| Run `pnpm db:push` on prod | 🔲 | Apply schema to Neon prod branch — do after dev is confirmed |
+| Run `pnpm db:generate` + `pnpm db:migrate` on prod | 🔲 | Apply schema to Neon prod branch — do after dev is confirmed |
 
 ---
 
