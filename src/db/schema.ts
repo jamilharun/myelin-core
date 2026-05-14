@@ -7,6 +7,7 @@ import {
   boolean,
   timestamp,
   doublePrecision,
+  jsonb,
   unique,
   check,
 } from "drizzle-orm/pg-core";
@@ -17,6 +18,25 @@ export const submissionTypeEnum = pgEnum("submission_type", [
   "optimization",
   "gotcha",
   "snippet",
+  "fix",
+  "benchmark",
+  "compiler_note",
+  "compatibility",
+]);
+
+export const confidenceEnum = pgEnum("confidence", [
+  "measured",
+  "documented",
+  "observed",
+  "theoretical",
+]);
+
+export const notificationTypeEnum = pgEnum("notification_type", [
+  "comment",
+  "upvote",
+  "flag_received",
+  "approved",
+  "rejected",
 ]);
 
 export const submissionStatusEnum = pgEnum("submission_status", [
@@ -127,6 +147,9 @@ export const submissions = pgTable("submissions", {
   // self-referential FK requires callback to avoid circular reference
   supersedes: text("supersedes").references((): AnyPgColumn => submissions.slug),
   supersededBy: text("superseded_by"),
+  // fix type only — points to the submission this corrects
+  fixFor: text("fix_for").references((): AnyPgColumn => submissions.slug),
+  confidence: confidenceEnum("confidence"),
   contentHash: text("content_hash").notNull(),
   status: submissionStatusEnum("status").notNull().default("pending"),
   version: integer("version").notNull().default(1),
@@ -168,3 +191,43 @@ export const votes = pgTable(
   },
   (table) => [unique("uq_user_submission_vote").on(table.userId, table.submissionId)]
 );
+
+// Snapshot of changed fields stored before each PATCH — newest first via createdAt desc
+export const editHistory = pgTable("edit_history", {
+  id: text("id").primaryKey(),
+  submissionId: text("submission_id")
+    .notNull()
+    .references(() => submissions.id, { onDelete: "cascade" }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id),
+  // JSON snapshot of the fields as they were before this edit
+  snapshot: jsonb("snapshot").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const webhooks = pgTable("webhooks", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  // HMAC-SHA256 signing secret — stored plaintext, shown once on creation
+  secret: text("secret").notNull(),
+  // e.g. ["submission.approved", "submission.flagged", "comment.created"]
+  events: text("events").array().notNull().default(sql`ARRAY[]::text[]`),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const notifications = pgTable("notifications", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  type: notificationTypeEnum("type").notNull(),
+  // Flexible payload: { submissionSlug, actorUsername, commentId, ... }
+  payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+  readAt: timestamp("read_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});

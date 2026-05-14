@@ -64,39 +64,99 @@ These are not features — they are the operational prerequisites for a real dep
 
 ---
 
-## V1.5 — Stability + agent polish 🔲
+## V1.5 — Stability + agent polish 🚧
 
 **Ship after V1 has real users and real data.**
 
-### New content types
+---
 
-| Type | Description | Requires |
+### Phase 1 — Schema 🚧
+
+> Foundation for everything else. Run `pnpm db:push` on dev after each schema change before moving to the next phase.
+
+| Item | Status | Notes |
 |---|---|---|
-| `fix` | Correctness fix for a submission — links via `fix_for` | `fix_for` FK in schema |
-| `benchmark` | Standalone reference measurement — no before/after, just value | Benchmark-only delta field |
-| `compiler_note` | Toolchain-specific behavior — codegen, flags, quirks | No new fields |
-| `compatibility` | Cross-arch portability notes — "works on X, breaks on Y" | No new fields |
+| New type enum values (`fix`, `benchmark`, `compiler_note`, `compatibility`) | ✅ | Added to `submissionTypeEnum` in `schema.ts` |
+| `confidenceEnum` (`measured · documented · observed · theoretical`) | ✅ | New pg enum in `schema.ts` |
+| `notificationTypeEnum` | ✅ | `comment · upvote · flag_received · approved · rejected` |
+| `fix_for` column on `submissions` | ✅ | Nullable self-ref FK → `submissions.slug` |
+| `confidence` column on `submissions` | ✅ | Nullable, uses `confidenceEnum` |
+| `edit_history` table | ✅ | `id, submission_id, user_id, snapshot jsonb, created_at` |
+| `webhooks` table | ✅ | `id, user_id, url, secret, events text[], active, created_at` |
+| `notifications` table | ✅ | `id, user_id, type, payload jsonb, read_at, created_at` |
+| Update `openapi-schemas.ts` response types | ✅ | `type` enum expanded, `fix_for` + `confidence` added |
+| Update `queries.ts` `submissionCols` | ✅ | `fixFor` + `confidence` added to shared select |
+| Update `formatters.ts` | ✅ | `fix_for` + `confidence` now read from DB row |
+| Run `pnpm db:push` on dev | 🔲 | Apply schema to Neon dev branch |
+| Run `pnpm db:push` on prod | 🔲 | Apply schema to Neon prod branch — do after dev is confirmed |
 
-### API additions
+---
 
-| Endpoint | Description |
-|---|---|
-| `GET /submissions/:slug/history` | Full edit history for a submission |
-| `GET /u/:username/submissions` | All approved submissions by a user |
-| `DELETE /api/v1/keys/:id` | Key revocation |
-| `GET /api/v1/keys` | List caller's active keys |
-| `POST /webhooks` | Register a webhook URL for submission events |
-| `GET /notifications` | Unread notifications for authenticated user |
+### Phase 2 — Validators 🔲
 
-### Improvements
+> Add new submission types to the discriminated union. No DB changes needed.
+
+| Item | Status | Notes |
+|---|---|---|
+| `fix` schema | 🔲 | Requires `fix_for: z.string()` (mandatory), optional `body`, `code_before/after` |
+| `benchmark` schema | 🔲 | Standalone measurement — `value`, `metric`, `cpu` required; no before/after |
+| `compiler_note` schema | 🔲 | `compiler` required, `body` required, no code fields |
+| `compatibility` schema | 🔲 | `body` required, `cpu` optional, no code fields |
+| Edit schemas for new types | 🔲 | Add to `editSubmissionSchema` discriminated union |
+| Add `confidence` to all create schemas | 🔲 | Optional field on all types |
+| Expand `VALID_TYPES` in `submissions.ts` | 🔲 | Filter param currently hardcoded to 3 types |
+
+---
+
+### Phase 3 — Write pipeline 🔲
+
+> Updates to `submissions-write.ts`. Order matters — validators must be done first.
+
+| Item | Status | Notes |
+|---|---|---|
+| Insert `fix_for` for `fix` type submissions | 🔲 | Write `fix_for` to DB on `POST /submissions` |
+| Insert `confidence` for all types | 🔲 | Write `confidence` to DB on `POST /submissions` |
+| Record snapshot to `edit_history` on PATCH | 🔲 | Insert before-snapshot before applying update — history endpoint depends on this |
+| Agent rate limit relaxation | 🔲 | `isApiKey` → use per-key limiter instead of IP limiter (`submissionRl`) |
+| `contentHash` covers `fix_for` for `fix` type | 🔲 | Prevent exact-duplicate fix submissions |
+
+---
+
+### Phase 4 — Read routes 🔲
+
+> New and extended endpoints. Phase 3 must be done first (history endpoint needs recorded snapshots).
+
+| Item | Status | Notes |
+|---|---|---|
+| `GET /submissions/:slug/history` | 🔲 | Read from `edit_history`, paginated, auth-gated to owner |
+| `GET /u/:username/submissions` | 🔲 | Add to `users.ts` — approved + canonical only, paginated |
+| `GET /submissions/queue` | 🔲 | Pending submissions for the caller — agents need this to avoid resubmit |
+| `GET /api/v1/keys` | 🔲 | List caller's active keys — never return `keyHash` |
+| `DELETE /api/v1/keys/:id` | 🔲 | Revoke own key — guard: can only delete your own, readonly keys excluded |
+| `GET /notifications` | 🔲 | Unread first, paginated — add to new `routes/notifications.ts` |
+| `POST /webhooks` + `GET /webhooks` | 🔲 | Registration only — delivery deferred. New `routes/webhooks.ts` |
+| `POST /admin/balloon/reset/:userId` | 🔲 | New `routes/admin.ts` — auth via `ADMIN_SECRET` env var |
+
+---
+
+### Phase 5 — Polish 🔲
+
+> Cross-cutting improvements. Can be done independently of phases 2–4.
+
+| Item | Status | Notes |
+|---|---|---|
+| `X-Total-Count` header on all list endpoints | 🔲 | New `setPaginationHeaders(c, total)` helper in `pagination.ts` |
+| Expose `X-Total-Count` in CORS | 🔲 | Add to `Access-Control-Expose-Headers` in `index.ts` — easy to miss |
+| Mount new route files in `index.ts` | 🔲 | `admin`, `webhooks`, `notifications` |
+| Similarity scoring | 🔲 | Fuzzy duplicate detection — needs `pg_trgm` extension on Neon; `SIMILAR_FOUND` error already stubbed |
+
+---
+
+### Previously completed
 
 | Item | Notes |
 |---|---|
-| Similarity scoring | Fuzzy duplicate detection (embedding or trigram) — V1 is SHA-256 exact match only |
-| `fix_for` linking | Schema FK + resolver. Returns `null` in V1 responses as placeholder |
-| `openapi.yaml` | Machine-readable spec checked into repo + Redoc hosted at `/docs` |
-| Balloon recovery endpoint | `POST /admin/balloon/reset/:userId` (admin-only) |
-| Agent pagination | `X-Total-Count` header on all list responses for agent consumption |
+| ✅ `openapi.yaml` | Served dynamically at `/openapi.json` via `app.doc31()` + Scalar UI at `/docs` — `index.ts:68-80` |
 
 ---
 

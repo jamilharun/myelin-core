@@ -27,7 +27,7 @@ const authorSchema = z.object({
 
 export const submissionSchema = z.object({
   slug: z.string(),
-  type: z.enum(["optimization", "gotcha", "snippet"]),
+  type: z.enum(["optimization", "gotcha", "snippet", "fix", "benchmark", "compiler_note", "compatibility"]),
   title: z.string(),
   status: z.enum(["pending", "approved", "flagged", "rejected"]),
   author: authorSchema,
@@ -46,7 +46,8 @@ export const submissionSchema = z.object({
   source_url: z.string().nullable(),
   supersedes: z.string().nullable(),
   superseded_by: z.string().nullable(),
-  fix_for: z.null(),
+  fix_for: z.string().nullable(),
+  confidence: z.enum(["measured", "documented", "observed", "theoretical"]).nullable(),
   canonical_slug: z.string(),
   version: z.number().int(),
   is_canonical: z.boolean(),
